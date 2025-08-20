@@ -12,10 +12,11 @@ A minimal C++ library for evaluating Swift expressions programmatically without 
 - **Context management**: Reset REPL context to clear variables and state
 - **Configurable**: Customizable timeout, debug settings, and evaluation options
 - **Modern C++**: Uses C++17 features, RAII, and move semantics
+- **Full Swift Support**: Built with LLDB that includes comprehensive Swift language runtime support
 
 ## Requirements
 
-- LLDB with Swift support
+- LLDB with Swift support (configured to use `/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert/lldb-linux-x86_64`)
 - CMake 3.16 or later
 - C++17 compatible compiler
 - Swift toolchain (for Swift language support in LLDB)
@@ -30,7 +31,7 @@ cmake ..
 make
 ```
 
-You may need to adjust the LLDB paths in `CMakeLists.txt` based on your LLDB installation.
+The project is configured to use your built LLDB with Swift support at `/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert/lldb-linux-x86_64`.
 
 ## Quick Start
 
@@ -247,6 +248,18 @@ Always check the `success` field of `EvaluationResult` and handle errors appropr
 - Check LLDB library compatibility
 - Ensure proper linking with all required libraries
 - Verify Swift runtime is available at runtime
+
+## LLDB Configuration
+
+This project is configured to use your built LLDB with Swift support at:
+`/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert/lldb-linux-x86_64`
+
+The configuration includes:
+- Full Swift language runtime support
+- Swift syntax parsing and compilation
+- Swift type system integration
+- Swift debugging and inspection capabilities
+- All necessary LLDB plugins for Swift development
 
 ## Contributing
 

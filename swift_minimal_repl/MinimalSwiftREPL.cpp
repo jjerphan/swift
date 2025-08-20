@@ -6,6 +6,7 @@
 #include "lldb/API/SBExpressionOptions.h"
 #include "lldb/API/SBValue.h"
 #include "lldb/API/SBError.h"
+#include "lldb/API/SBLaunchInfo.h"
 
 #include <iostream>
 #include <memory>
@@ -21,6 +22,7 @@ class MinimalSwiftREPL::Impl {
 public:
     lldb::SBDebugger debugger;
     lldb::SBTarget target;
+    lldb::SBProcess process;
     lldb::SBExpressionOptions options;
     REPLConfig config;
     bool initialized = false;
@@ -35,7 +37,7 @@ public:
         std::lock_guard<std::mutex> lock(initMutex);
         if (!lldbInitialized) {
             lldb::SBDebugger::Initialize();
-            lldbInitialized = true;
+            Impl::lldbInitialized = true;
         }
     }
     
@@ -56,12 +58,29 @@ public:
             // Set debugger to synchronous mode for predictable behavior
             debugger.SetAsync(false);
             
-            // Create an empty target for expression evaluation
-            target = debugger.CreateTarget("");
+            // Create a target with a simple executable
+            target = debugger.CreateTarget("/tmp/test");
             if (!target.IsValid()) {
                 lastError = "Failed to create LLDB target";
                 return false;
             }
+            
+            // Create a launch info for the process
+            const char* argv[] = {"/tmp/test", nullptr};
+            lldb::SBLaunchInfo launch_info(argv);
+            launch_info.SetLaunchFlags(lldb::eLaunchFlagStopAtEntry);
+            
+            // Launch the process to create a proper execution context
+            lldb::SBError error;
+            process = target.Launch(launch_info, error);
+            
+            if (!process.IsValid()) {
+                lastError = "Failed to launch process: " + std::string(error.GetCString() ? error.GetCString() : "Unknown error");
+                return false;
+            }
+            
+            // Stop the process immediately to avoid it running away
+            process.Stop();
             
             // Configure expression options for Swift
             options.SetLanguage(lldb::eLanguageTypeSwift);
@@ -137,9 +156,30 @@ public:
         }
         
         try {
-            // Create a new target to reset the evaluation context
-            target = debugger.CreateTarget("");
-            return target.IsValid();
+            // Kill the current process if it's still running
+            if (process.IsValid()) {
+                process.Kill();
+            }
+            
+            // Create a new target and process to reset the evaluation context
+            target = debugger.CreateTarget("/tmp/test");
+            if (!target.IsValid()) {
+                return false;
+            }
+            
+            const char* argv[] = {"/tmp/test", nullptr};
+            lldb::SBLaunchInfo launch_info(argv);
+            launch_info.SetLaunchFlags(lldb::eLaunchFlagStopAtEntry);
+            
+            lldb::SBError error;
+            process = target.Launch(launch_info, error);
+            
+            if (!process.IsValid()) {
+                return false;
+            }
+            
+            process.Stop();
+            return true;
         } catch (...) {
             lastError = "Failed to reset REPL context";
             return false;
@@ -228,12 +268,31 @@ bool MinimalSwiftREPL::isSwiftSupportAvailable() {
         std::cout << "[DEBUG] LLDB debugger created successfully" << std::endl;
         
         std::cout << "[DEBUG] Creating LLDB target..." << std::endl;
-        lldb::SBTarget target = debugger.CreateTarget("");
+        // Use a simple executable to avoid crashes
+        lldb::SBTarget target = debugger.CreateTarget("/tmp/test");
         if (!target.IsValid()) {
             std::cout << "[ERROR] Failed to create LLDB target" << std::endl;
             return false;
         }
         std::cout << "[DEBUG] LLDB target created successfully" << std::endl;
+        
+        // Create a launch info and launch the process
+        std::cout << "[DEBUG] Launching process..." << std::endl;
+        const char* argv[] = {"/tmp/test", nullptr};
+        lldb::SBLaunchInfo launch_info(argv);
+        launch_info.SetLaunchFlags(lldb::eLaunchFlagStopAtEntry);
+        
+        lldb::SBError error;
+        lldb::SBProcess process = target.Launch(launch_info, error);
+        
+        if (!process.IsValid()) {
+            std::cout << "[ERROR] Failed to launch process: " << (error.GetCString() ? error.GetCString() : "Unknown error") << std::endl;
+            return false;
+        }
+        
+        // Stop the process immediately
+        process.Stop();
+        std::cout << "[DEBUG] Process launched and stopped successfully" << std::endl;
         
         // Try a simple Swift expression to test support
         std::cout << "[DEBUG] Setting up Swift expression options..." << std::endl;

@@ -4,16 +4,15 @@ project(SwiftMinimalREPL)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find LLDB installation
-# You may need to adjust these paths based on your LLDB build/installation
-set(LLDB_BUILD_DIR "/home/jjerphan/dev/llvm-project/build-lldb-swift" CACHE PATH "Path to LLDB build directory")
+# Use the user's built LLDB with Swift support
+set(LLDB_BUILD_DIR "/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert/lldb-linux-x86_64" CACHE PATH "Path to LLDB build directory with Swift support")
 
-# Include directories
+# Include directories - use source headers from LLDB project since build doesn't have full API headers
 include_directories(
     ${LLDB_BUILD_DIR}/include
-    ${LLDB_BUILD_DIR}/tools/lldb/include
     /home/jjerphan/dev/llvm-project/lldb/include
     /home/jjerphan/dev/llvm-project/llvm/include
+    /home/jjerphan/dev/llvm-project/clang/include
 )
 
 # Link directories
@@ -32,9 +31,10 @@ target_include_directories(MinimalSwiftREPL PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# Link against LLDB libraries
+# Link against LLDB libraries with Swift support - simplified approach
 target_link_libraries(MinimalSwiftREPL
-    ${LLDB_BUILD_DIR}/lib/liblldb.so.19.1.5
+    ${LLDB_BUILD_DIR}/lib/liblldb.so
+    # System libraries
     pthread
     dl
     z
