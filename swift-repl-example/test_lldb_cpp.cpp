@@ -78,17 +78,17 @@ int main() {
         std::cout << "   - Target valid: " << (target.IsValid() ? "Yes" : "No") << std::endl;
         std::cout << "   - Target triple: " << (target.GetTriple() ? target.GetTriple() : "None") << std::endl;
 
-        // Test breakpoint creation (without launching)
+        // Test breakpoint creation
         std::cout << "\n📍 Testing breakpoint creation..." << std::endl;
-        lldb::SBBreakpoint breakpoint = target.BreakpointCreateByName("main");
-        if (breakpoint.IsValid()) {
-            std::cout << "   ✅ Breakpoint created successfully" << std::endl;
-            std::cout << "   - Breakpoint ID: " << breakpoint.GetID() << std::endl;
-            std::cout << "   - Breakpoint enabled: " << (breakpoint.IsEnabled() ? "Yes" : "No") << std::endl;
-            std::cout << "   - Breakpoint hit count: " << breakpoint.GetHitCount() << std::endl;
-        } else {
-            std::cout << "   ❌ Failed to create breakpoint" << std::endl;
+        lldb::SBBreakpoint main_breakpoint = target.BreakpointCreateByName("main");
+        if (!main_breakpoint.IsValid()) {
+            std::cout << "❌ Failed to create main breakpoint" << std::endl;
+            return 1;
         }
+        std::cout << "   ✅ Main breakpoint created successfully" << std::endl;
+        std::cout << "   - Breakpoint ID: " << main_breakpoint.GetID() << std::endl;
+        std::cout << "   - Breakpoint enabled: " << (main_breakpoint.IsEnabled() ? "Yes" : "No") << std::endl;
+        std::cout << "   - Breakpoint hit count: " << main_breakpoint.GetHitCount() << std::endl;
 
         // Test expression options creation
         std::cout << "\n🔧 Testing expression options..." << std::endl;
@@ -97,34 +97,49 @@ int main() {
         std::cout << "   ✅ Expression options created successfully" << std::endl;
         std::cout << "   - Language: C++" << std::endl;
 
-        // Try to launch process (but don't wait indefinitely)
-        std::cout << "\n🚀 Testing process launch..." << std::endl;
-        lldb::SBProcess process = target.LaunchSimple(nullptr, nullptr, nullptr);
+        // Test what happens when we try to evaluate expressions without execution context
+        std::cout << "\n🧮 Testing expression evaluation WITHOUT execution context..." << std::endl;
+        std::cout << "   (This will fail, but demonstrates the API calls)" << std::endl;
         
-        if (!process.IsValid()) {
-            std::cout << "❌ Failed to launch process" << std::endl;
-        } else {
-            std::cout << "✅ Process launched successfully" << std::endl;
-            std::cout << "   - Process ID: " << process.GetProcessID() << std::endl;
-            std::cout << "   - Process state: " << lldb::SBDebugger::StateAsCString(process.GetState()) << std::endl;
-            
-            // Wait briefly to see if it progresses
-            std::cout << "   - Waiting briefly for process state change..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            std::cout << "   - New process state: " << lldb::SBDebugger::StateAsCString(process.GetState()) << std::endl;
-            
-            // Clean up process
-            process.Destroy();
-        }
-
-        // Explain why expression evaluation fails without execution context
-        std::cout << "\n💡 Understanding Expression Evaluation Limitations:" << std::endl;
-        std::cout << "   LLDB requires a proper execution context to evaluate expressions." << std::endl;
-        std::cout << "   This means:" << std::endl;
-        std::cout << "   - A process must be running and stopped at a breakpoint" << std::endl;
-        std::cout << "   - Variables and functions must exist in memory" << std::endl;
-        std::cout << "   - The program must be in a debuggable state" << std::endl;
-        std::cout << "   - Without this context, expressions like '2 + 2' cannot be evaluated" << std::endl;
+        // Test basic expressions
+        std::cout << "\n📊 Basic expressions:" << std::endl;
+        evaluateExpression(target, "2 + 2", "2 + 2");
+        evaluateExpression(target, "10 - 3", "10 - 3");
+        evaluateExpression(target, "4 * 5", "4 * 5");
+        
+        // Test string expressions
+        std::cout << "\n📝 String expressions:" << std::endl;
+        evaluateExpression(target, "\"Hello, World!\"", "String literal");
+        evaluateExpression(target, "std::string(\"LLDB\")", "std::string constructor");
+        
+        // Test boolean expressions
+        std::cout << "\n🔍 Boolean expressions:" << std::endl;
+        evaluateExpression(target, "true", "true literal");
+        evaluateExpression(target, "false", "false literal");
+        evaluateExpression(target, "5 > 3", "5 > 3");
+        
+        // Test type operations
+        std::cout << "\n🏷️ Type operations:" << std::endl;
+        evaluateExpression(target, "sizeof(int)", "sizeof(int)");
+        evaluateExpression(target, "sizeof(double)", "sizeof(double)");
+        evaluateExpression(target, "sizeof(char)", "sizeof(char)");
+        
+        // Explain the execution context requirement
+        std::cout << "\n💡 Understanding Execution Context Requirements:" << std::endl;
+        std::cout << "   LLDB expression evaluation requires a proper execution context:" << std::endl;
+        std::cout << "   " << std::endl;
+        std::cout << "   1. A process must be launched and running" << std::endl;
+        std::cout << "   2. The process must be stopped at a breakpoint" << std::endl;
+        std::cout << "   3. Variables and functions must exist in memory" << std::endl;
+        std::cout << "   4. The program must be in a debuggable state" << std::endl;
+        std::cout << "   " << std::endl;
+        std::cout << "   Current issue: Process launch hangs in 'launching' state" << std::endl;
+        std::cout << "   This prevents us from reaching the required execution context" << std::endl;
+        std::cout << "   " << std::endl;
+        std::cout << "   Possible solutions:" << std::endl;
+        std::cout << "   - Use a different LLDB version" << std::endl;
+        std::cout << "   - Try different launch methods" << std::endl;
+        std::cout << "   - Use external debugging tools" << std::endl;
         
         // Test command interpreter
         std::cout << "\n📝 Testing debugger commands..." << std::endl;
@@ -136,7 +151,6 @@ int main() {
         }
 
         // Clean up
-        process.Destroy();
         debugger.Destroy(debugger);
         lldb::SBDebugger::Terminate();
         std::cout << "✅ LLDB cleaned up successfully" << std::endl;
