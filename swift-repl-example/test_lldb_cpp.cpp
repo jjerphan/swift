@@ -55,7 +55,7 @@ int main() {
 
         // Compile the test program
         std::cout << "\n🔨 Compiling simple_test.cpp..." << std::endl;
-        std::string compile_cmd = "g++ -g -o simple_test simple_test.cpp";
+        std::string compile_cmd = "g++ -O2 -DNDEBUG -o simple_test simple_test.cpp";
         int compile_result = std::system(compile_cmd.c_str());
         
         if (compile_result != 0) {
@@ -106,23 +106,49 @@ int main() {
         evaluateExpression(target, "2 + 2", "2 + 2");
         evaluateExpression(target, "10 - 3", "10 - 3");
         evaluateExpression(target, "4 * 5", "4 * 5");
+        evaluateExpression(target, "15 / 3", "15 / 3");
+        evaluateExpression(target, "7 % 3", "7 % 3");
+        evaluateExpression(target, "3.14 + 2.86", "3.14 + 2.86");
         
-        // Test string expressions
+        // Test string expressions (commented out - requires execution context)
+        /*
         std::cout << "\n📝 String expressions:" << std::endl;
         evaluateExpression(target, "\"Hello, World!\"", "String literal");
         evaluateExpression(target, "std::string(\"LLDB\")", "std::string constructor");
+        */
         
         // Test boolean expressions
         std::cout << "\n🔍 Boolean expressions:" << std::endl;
         evaluateExpression(target, "true", "true literal");
         evaluateExpression(target, "false", "false literal");
         evaluateExpression(target, "5 > 3", "5 > 3");
+        evaluateExpression(target, "5 < 3", "5 < 3");
+        evaluateExpression(target, "5 == 5", "5 == 5");
+        evaluateExpression(target, "5 != 3", "5 != 3");
+        
+        // Test bitwise operations
+        std::cout << "\n🔧 Bitwise operations:" << std::endl;
+        evaluateExpression(target, "5 & 3", "5 & 3 (AND)");
+        evaluateExpression(target, "5 | 3", "5 | 3 (OR)");
+        evaluateExpression(target, "5 ^ 3", "5 ^ 3 (XOR)");
+        evaluateExpression(target, "~5", "~5 (NOT)");
+        evaluateExpression(target, "5 << 1", "5 << 1 (left shift)");
+        evaluateExpression(target, "10 >> 1", "10 >> 1 (right shift)");
         
         // Test type operations
         std::cout << "\n🏷️ Type operations:" << std::endl;
         evaluateExpression(target, "sizeof(int)", "sizeof(int)");
         evaluateExpression(target, "sizeof(double)", "sizeof(double)");
         evaluateExpression(target, "sizeof(char)", "sizeof(char)");
+        evaluateExpression(target, "sizeof(bool)", "sizeof(bool)");
+        evaluateExpression(target, "sizeof(long)", "sizeof(long)");
+        evaluateExpression(target, "sizeof(float)", "sizeof(float)");
+        
+        // Test conditional expressions
+        std::cout << "\n❓ Conditional expressions:" << std::endl;
+        evaluateExpression(target, "5 > 3 ? \"Yes\" : \"No\"", "Ternary operator (true)");
+        evaluateExpression(target, "5 < 3 ? \"Yes\" : \"No\"", "Ternary operator (false)");
+        evaluateExpression(target, "5 == 5 ? 100 : 0", "Ternary operator with numbers");
         
         // Explain the execution context requirement
         std::cout << "\n💡 Understanding Execution Context Requirements:" << std::endl;
