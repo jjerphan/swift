@@ -7,10 +7,13 @@
 #include "lldb/API/SBValue.h"
 #include "lldb/API/SBError.h"
 #include "lldb/API/SBLaunchInfo.h"
+#include "lldb/API/SBPlatform.h"
+#include "lldb/API/SBCommandInterpreter.h"
 
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <unistd.h>
 
 namespace SwiftMinimalREPL {
 
@@ -33,6 +36,12 @@ public:
     static bool lldbInitialized;
     
     explicit Impl(const REPLConfig& cfg) : config(cfg) {
+        // Set Swift resource directory environment variable before initializing LLDB
+        std::cout << "[DEBUG] Setting Swift resource directory environment variable..." << std::endl;
+        std::string swift_root = "/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert/swift-linux-x86_64";
+        setenv("SWIFT_RESOURCE_DIR", swift_root.c_str(), 1);
+        std::cout << "[DEBUG] Set SWIFT_RESOURCE_DIR=" << getenv("SWIFT_RESOURCE_DIR") << std::endl;
+        
         // Ensure LLDB is initialized (thread-safe)
         std::lock_guard<std::mutex> lock(initMutex);
         if (!lldbInitialized) {
@@ -82,6 +91,154 @@ public:
             // Stop the process immediately to avoid it running away
             process.Stop();
             
+            // Try to explicitly load Swift libraries into the target process
+            // This might help with symbol resolution
+            std::cout << "[DEBUG] Attempting to preload Swift libraries..." << std::endl;
+            
+            // Set environment variables that might help with Swift library discovery
+            std::string swift_root = "/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert/swift-linux-x86_64";
+            std::string swift_lib_path = swift_root + "/lib/swift/linux";
+            std::string swift_lib_x86_64_path = swift_root + "/lib/swift/linux/x86_64";
+            
+            // Try to explicitly load Swift modules using LLDB's module loading
+            std::cout << "[DEBUG] Attempting to load Swift modules..." << std::endl;
+            try {
+                // Try to load the Swift standard library module
+                lldb::SBError module_error;
+                
+                // Try to load libswiftCore.so explicitly
+                std::string swift_core_path = swift_lib_path + "/libswiftCore.so";
+                std::cout << "[DEBUG] Trying to load: " << swift_core_path << std::endl;
+                
+                // Use LLDB's module loading mechanism
+                if (access(swift_core_path.c_str(), F_OK) == 0) {
+                    std::cout << "[DEBUG] Swift core library file exists" << std::endl;
+                    
+                    // Try to add the module to the target using the correct API
+                    // Note: This is experimental and might not work
+                    lldb::SBModule module = target.AddModule(swift_core_path.c_str(), nullptr, nullptr);
+                    if (module.IsValid()) {
+                        std::cout << "[DEBUG] Successfully loaded Swift core module" << std::endl;
+                    } else {
+                        std::cout << "[DEBUG] Failed to load Swift core module" << std::endl;
+                    }
+                } else {
+                    std::cout << "[DEBUG] Swift core library file does not exist: " << swift_core_path << std::endl;
+                }
+                
+                // Try to also load the Swift standard library module using Swift-specific paths
+                std::string swift_module_path = swift_lib_path + "/Swift.swiftmodule";
+                std::cout << "[DEBUG] Trying to find Swift module directory: " << swift_module_path << std::endl;
+                
+                if (access(swift_module_path.c_str(), F_OK) == 0) {
+                    std::cout << "[DEBUG] Swift module directory exists" << std::endl;
+                    
+                    // Look for the actual .swiftmodule file
+                    std::string swiftmodule_file = swift_module_path + "/x86_64-unknown-linux-gnu.swiftmodule";
+                    if (access(swiftmodule_file.c_str(), F_OK) == 0) {
+                        std::cout << "[DEBUG] Found Swift.swiftmodule file: " << swiftmodule_file << std::endl;
+                        
+                                        // Try to add this as a module
+                lldb::SBModule swift_module = target.AddModule(swiftmodule_file.c_str(), nullptr, nullptr);
+                if (swift_module.IsValid()) {
+                    std::cout << "[DEBUG] Successfully loaded Swift.swiftmodule" << std::endl;
+                } else {
+                    std::cout << "[DEBUG] Failed to load Swift.swiftmodule" << std::endl;
+                }
+                
+                // Try to use LLDB's process to load the Swift libraries
+                std::cout << "[DEBUG] Attempting to load Swift libraries via process..." << std::endl;
+                try {
+                    // Try to load libswiftCore.so into the target process
+                    lldb::SBError process_error;
+                    std::string swift_core_lib = "libswiftCore.so";
+                    
+                    // Use the process to load the library
+                    uint32_t token = process.LoadImage(swift_core_lib.c_str(), nullptr, process_error);
+                    if (token != 0) {
+                        std::cout << "[DEBUG] Successfully loaded libswiftCore.so via process, token: " << token << std::endl;
+                    } else {
+                        std::cout << "[DEBUG] Failed to load libswiftCore.so via process: " << process_error.GetCString() << std::endl;
+                    }
+                } catch (const std::exception& e) {
+                    std::cout << "[DEBUG] Exception during process loading: " << e.what() << std::endl;
+                } catch (...) {
+                    std::cout << "[DEBUG] Unknown exception during process loading" << std::endl;
+                }
+                    } else {
+                        std::cout << "[DEBUG] Swift.swiftmodule file not found: " << swiftmodule_file << std::endl;
+                    }
+                } else {
+                    std::cout << "[DEBUG] Swift module directory does not exist: " << swift_module_path << std::endl;
+                }
+                
+                            // Try a different approach - set environment variables that might help LLDB find Swift modules
+            std::cout << "[DEBUG] Setting Swift module environment variables..." << std::endl;
+            
+            // Set environment variables in the current process that might help LLDB
+            setenv("SWIFT_ROOT", swift_root.c_str(), 1);
+            setenv("SWIFT_LIBRARY_PATH", swift_lib_path.c_str(), 1);
+            setenv("SWIFT_MODULE_PATH", swift_module_path.c_str(), 1);
+            
+            std::cout << "[DEBUG] Set environment variables: SWIFT_ROOT=" << getenv("SWIFT_ROOT") 
+                          << ", SWIFT_LIBRARY_PATH=" << getenv("SWIFT_LIBRARY_PATH")
+                          << ", SWIFT_MODULE_PATH=" << getenv("SWIFT_MODULE_PATH") << std::endl;
+            
+            // Set Swift module search paths on the target
+            std::cout << "[DEBUG] Setting Swift module search paths on target..." << std::endl;
+            try {
+                // Use LLDB's command interpreter to set the Swift module search paths
+                lldb::SBCommandInterpreter interpreter = debugger.GetCommandInterpreter();
+                if (interpreter.IsValid()) {
+                    std::string command = "settings set target.swift-module-search-paths " + swift_lib_path;
+                    std::cout << "[DEBUG] Executing command: " << command << std::endl;
+                    
+                    lldb::SBCommandReturnObject result;
+                    interpreter.HandleCommand(command.c_str(), result);
+                    
+                    if (result.Succeeded()) {
+                        std::cout << "[DEBUG] Successfully set Swift module search paths" << std::endl;
+                    } else {
+                        std::cout << "[DEBUG] Failed to set Swift module search paths: " << result.GetError() << std::endl;
+                    }
+                    
+                    // Try to set additional Swift-specific settings
+                    std::cout << "[DEBUG] Setting additional Swift settings..." << std::endl;
+                    
+                    // Try to set Swift framework search paths
+                    std::string framework_command = "settings set target.swift-framework-search-paths " + swift_lib_path;
+                    interpreter.HandleCommand(framework_command.c_str(), result);
+                    if (result.Succeeded()) {
+                        std::cout << "[DEBUG] Successfully set Swift framework search paths" << std::endl;
+                    } else {
+                        std::cout << "[DEBUG] Failed to set Swift framework search paths: " << result.GetError() << std::endl;
+                    }
+                    
+                    // Try to set Swift extra clang flags to include our paths
+                    std::string clang_flags = "-I" + swift_root + "/include -L" + swift_lib_path;
+                    std::string clang_command = "settings set target.swift-extra-clang-flags " + clang_flags;
+                    interpreter.HandleCommand(clang_command.c_str(), result);
+                    if (result.Succeeded()) {
+                        std::cout << "[DEBUG] Successfully set Swift extra clang flags" << std::endl;
+                    } else {
+                        std::cout << "[DEBUG] Failed to set Swift extra clang flags: " << result.GetError() << std::endl;
+                    }
+                    
+                } else {
+                    std::cout << "[DEBUG] Command interpreter is not valid" << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cout << "[DEBUG] Exception during setting Swift module search paths: " << e.what() << std::endl;
+            } catch (...) {
+                std::cout << "[DEBUG] Unknown exception during setting Swift module search paths" << std::endl;
+            }
+                
+            } catch (const std::exception& e) {
+                std::cout << "[DEBUG] Exception during module loading: " << e.what() << std::endl;
+            } catch (...) {
+                std::cout << "[DEBUG] Unknown exception during module loading" << std::endl;
+            }
+            
             // Configure expression options for Swift
             options.SetLanguage(lldb::eLanguageTypeSwift);
             options.SetFetchDynamicValue(config.fetch_dynamic_values ? 
@@ -90,6 +247,65 @@ public:
             options.SetUnwindOnError(config.unwind_on_error);
             options.SetIgnoreBreakpoints(config.ignore_breakpoints);
             options.SetGenerateDebugInfo(config.generate_debug_info);
+            
+            // Try to set Swift-specific options that might help with module resolution
+            std::cout << "[DEBUG] Configuring Swift expression options..." << std::endl;
+            
+            // Set additional Swift-specific options if available
+            try {
+                // Try to set Swift module search paths
+                // Note: These options might not be available in all LLDB versions
+                if (options.GetSuppressPersistentResult()) {
+                    std::cout << "[DEBUG] Swift options support detected" << std::endl;
+                }
+                
+                // Try to set Swift framework search paths
+                std::string swift_framework_path = swift_root + "/lib/swift/linux";
+                std::cout << "[DEBUG] Swift framework path: " << swift_framework_path << std::endl;
+                
+            } catch (...) {
+                std::cout << "[DEBUG] Advanced Swift options not available" << std::endl;
+            }
+            
+            // Try to force the Swift standard library to be imported by evaluating a simple import
+            std::cout << "[DEBUG] Attempting to force Swift standard library import..." << std::endl;
+            try {
+                // Try to evaluate a simple import statement to force the Swift standard library to be loaded
+                lldb::SBValue import_result = target.EvaluateExpression("import Swift", options);
+                if (import_result.IsValid() && !import_result.GetError().Fail()) {
+                    std::cout << "[DEBUG] Successfully imported Swift standard library" << std::endl;
+                } else {
+                    std::cout << "[DEBUG] Failed to import Swift standard library: " 
+                              << (import_result.GetError().GetCString() ? import_result.GetError().GetCString() : "Unknown error") << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cout << "[DEBUG] Exception during Swift import: " << e.what() << std::endl;
+            } catch (...) {
+                std::cout << "[DEBUG] Unknown exception during Swift import" << std::endl;
+            }
+            
+            // Try to override the Swift resource directory by setting environment variables
+            // that the Swift compiler might recognize
+            std::cout << "[DEBUG] Setting Swift compiler environment variables..." << std::endl;
+            
+            // Set environment variables that might be recognized by the Swift compiler
+            setenv("SWIFT_RESOURCE_DIR", swift_root.c_str(), 1);
+            setenv("SWIFT_LIBRARY_PATH", swift_lib_path.c_str(), 1);
+            setenv("SWIFT_MODULE_PATH", (swift_lib_path + "/Swift.swiftmodule").c_str(), 1);
+            
+            // Try to set additional Swift compiler paths
+            std::string swift_include_path = swift_root + "/include/swift";
+            std::string swift_lib_path_full = swift_root + "/lib";
+            
+            setenv("SWIFT_INCLUDE_PATH", swift_include_path.c_str(), 1);
+            setenv("SWIFT_LIB_PATH", swift_lib_path_full.c_str(), 1);
+            
+            std::cout << "[DEBUG] Set Swift compiler environment variables:" << std::endl;
+            std::cout << "[DEBUG]   SWIFT_RESOURCE_DIR=" << getenv("SWIFT_RESOURCE_DIR") << std::endl;
+            std::cout << "[DEBUG]   SWIFT_LIBRARY_PATH=" << getenv("SWIFT_LIBRARY_PATH") << std::endl;
+            std::cout << "[DEBUG]   SWIFT_MODULE_PATH=" << getenv("SWIFT_MODULE_PATH") << std::endl;
+            std::cout << "[DEBUG]   SWIFT_INCLUDE_PATH=" << getenv("SWIFT_INCLUDE_PATH") << std::endl;
+            std::cout << "[DEBUG]   SWIFT_LIB_PATH=" << getenv("SWIFT_LIB_PATH") << std::endl;
             
             if (config.timeout_usec > 0) {
                 options.SetTimeoutInMicroSeconds(config.timeout_usec);
