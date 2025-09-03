@@ -8,33 +8,27 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <thread>
 
-// Swift parsing and JIT includes
-#include "swift/Parse/Parser.h"
-#include "swift/AST/ASTContext.h"
-#include "swift/AST/Module.h"
-#include "swift/AST/SourceFile.h"
-#include "swift/Basic/SourceManager.h"
-#include "swift/Basic/LLVM.h"
-#include "swift/Frontend/Frontend.h"
-#include "swift/Frontend/FrontendOptions.h"
-#include "swift/SIL/SILModule.h"
-#include "swift/AST/SILOptions.h"
-#include "swift/AST/IRGenOptions.h"
-#include "swift/Immediate/SwiftMaterializationUnit.h"
-#include "swift/Immediate/Immediate.h"
-
-// LLVM includes
+// Basic LLVM includes only
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/InitLLVM.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/TargetSelect.h"
+
+// Swift compiler includes (minimal set)
+#include "swift/Frontend/Frontend.h"
+#include "swift/Immediate/Immediate.h"
 
 namespace SwiftJITREPL {
 
 /**
  * Private implementation class (PIMPL idiom)
- * Implements the complete REPL pattern using Swift's immediate abstractions
+ * Implements a minimal REPL pattern using basic LLVM components
  */
 class SwiftJITREPL::Impl {
 public:
@@ -42,12 +36,11 @@ public:
     bool initialized = false;
     std::string lastError;
     
+    // LLVM infrastructure
+    std::unique_ptr<llvm::LLVMContext> llvmContext;
+    
     // Swift compiler infrastructure
     std::unique_ptr<swift::CompilerInstance> compilerInstance;
-    std::unique_ptr<swift::SwiftJIT> swiftJIT;
-    swift::ASTContext* astContext = nullptr;  // Raw pointer managed by Swift
-    swift::ModuleDecl* module = nullptr;      // Raw pointer managed by Swift
-    swift::SourceManager* sourceManager = nullptr;  // Raw pointer managed by Swift
     
     // Compilation state
     std::vector<std::string> sourceFiles;
@@ -58,15 +51,19 @@ public:
     
     // Static initialization management
     static std::mutex initMutex;
-    static bool swiftInitialized;
-    
+    static bool llvmInitialized;
+
     explicit Impl(const REPLConfig& cfg) : config(cfg) {
-        // Ensure Swift compiler is initialized (thread-safe)
+        // Ensure LLVM is initialized (thread-safe)
         std::lock_guard<std::mutex> lock(initMutex);
-        if (!swiftInitialized) {
-            // Initialize Swift compiler subsystems
-            // This will be done when we create the CompilerInstance
-            Impl::swiftInitialized = true;
+        if (!llvmInitialized) {
+            // Initialize basic LLVM subsystems
+            llvm::InitializeAllTargetInfos();
+            llvm::InitializeAllTargets();
+            llvm::InitializeAllTargetMCs();
+            llvm::InitializeAllAsmPrinters();
+            llvm::InitializeAllAsmParsers();
+            Impl::llvmInitialized = true;
         }
     }
     
@@ -74,45 +71,40 @@ public:
     
     bool initialize() {
         try {
-            // Create and configure CompilerInstance
-            auto invocation = std::make_unique<swift::CompilerInvocation>();
+            // Create LLVM context
+            llvmContext = std::make_unique<llvm::LLVMContext>();
             
-            // // Set up language options
-            // invocation->getLangOptions().EnableExperimentalConcurrency = true;
+            // Create Swift compiler instance
+            compilerInstance = std::make_unique<swift::CompilerInstance>();
             
-            // // Set up diagnostic options
-            // invocation->getDiagnosticOptions().SuppressWarnings = false;
+            // Create and configure the compiler invocation for JIT/REPL mode
+            swift::CompilerInvocation invocation;
             
-            // // Create CompilerInstance
-            // compilerInstance = std::make_unique<swift::CompilerInstance>();
-            // if (compilerInstance->create(*invocation)) {
-            //     lastError = "Failed to create CompilerInstance";
-            //     return false;
-            // }
+            // Set up language options for JIT mode
+            invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
+            invocation.getLangOptions().EnableObjCInterop = false;
             
-            // // Create module
-            // module = std::unique_ptr<swift::ModuleDecl>(
-            //     swift::ModuleDecl::create(swift::Identifier(), compilerInstance->getASTContext(), nullptr)
-            // );
+            // Set up frontend options for JIT mode
+            invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::REPL;
             
-            // // Create SwiftJIT
-            // auto swiftJITResult = swift::SwiftJIT::Create(*compilerInstance);
-            // if (!swiftJITResult) {
-            //     lastError = "Failed to create SwiftJIT: " + 
-            //                llvm::toString(swiftJITResult.takeError());
-            //     return false;
-            // }
-            // swiftJIT = std::move(*swiftJITResult);
+            // Set up SIL options
+            invocation.getSILOptions().OptMode = swift::OptimizationMode::NoOptimization;
             
-            // // Set module name
-            // currentModuleName = "SwiftJITREPL";
+            // Set up IRGen options
+            invocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
             
-            // // Mark as initialized
-            // initialized = true;
+            // Set up the compiler instance
+            std::string error;
+            if (!compilerInstance->setup(invocation, error)) {
+                lastError = "Failed to setup Swift compiler instance: " + error;
+                return false;
+            }
             
+            initialized = true;
             return true;
+            
         } catch (const std::exception& e) {
-            lastError = e.what();
+            lastError = std::string("Initialization failed: ") + e.what();
             return false;
         }
     }
@@ -125,54 +117,39 @@ public:
         auto start_time = std::chrono::high_resolution_clock::now();
         
         try {
+            // For REPL mode, we can use the Swift compiler's built-in immediate mode
+            // Create a temporary file with the expression and use RunImmediatelyFromAST
+            
             // 1. Create MemoryBuffer from code string
             auto buffer = llvm::MemoryBuffer::getMemBuffer(expression, "repl_input");
             if (!buffer) {
                 return EvaluationResult("Failed to create memory buffer");
             }
             
-            // // 2. Add to SourceManager and get BufferID
-            // unsigned bufferID = sourceManager.addNewSourceBuffer(std::move(buffer));
+            // 2. Add to SourceManager
+            auto &sourceManager = compilerInstance->getSourceMgr();
+            unsigned bufferID = sourceManager.addNewSourceBuffer(std::move(buffer));
             
-            // // 3. Create SourceFile
-            // auto sourceFile = new swift::SourceFile(
-            //     *module, 
-            //     swift::SourceFileKind::REPL, 
-            //     bufferID,
-            //     swift::SourceFile::getDefaultParsingOptions(compilerInstance->getASTContext().LangOpts),
-            //     true  // isPrimary
-            // );
-            
-            // // 4. Parse into AST
-            // swift::Parser parser(bufferID, *sourceFile, 
-            //                    &compilerInstance->getDiagnosticEngine(), 
-            //                    nullptr, nullptr);
-            
-            // llvm::SmallVector<swift::ASTNode> items;
-            // parser.parseTopLevelItems(items);
-            // sourceFile->Items = std::move(items);
-            
-            // 5. Generate SIL - simplified for now
-            // Note: SILModule creation is complex and may require different API
-            // For now, we'll skip SIL generation and focus on getting parsing working
-            
-            // 6. Create MaterializationUnit and add to SwiftJIT
-            // Note: This requires SILModule, which we're not generating yet
-            // For now, we'll just indicate that parsing succeeded
-            
-            // 7. Execute and get result
-            // For now, we'll return a success message indicating the code was parsed
-            // In a full implementation, we'd generate SIL, compile, and execute
+            // 3. Use the Swift compiler's immediate execution
+            int result = swift::RunImmediatelyFromAST(*compilerInstance);
             
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
             
             // Update statistics
             stats.total_expressions++;
-            stats.successful_compilations++;
+            if (result == 0) {
+                stats.successful_compilations++;
+            } else {
+                stats.failed_compilations++;
+            }
             stats.total_execution_time_ms += duration.count() / 1000.0;
             
-            return EvaluationResult("Successfully parsed Swift code: " + expression, "String");
+            if (result == 0) {
+                return EvaluationResult("Successfully executed Swift code: " + expression, "Any");
+            } else {
+                return EvaluationResult("Execution failed with exit code: " + std::to_string(result));
+            }
             
         } catch (const std::exception& e) {
             lastError = e.what();
@@ -200,29 +177,13 @@ public:
             }
             
             // Add to SourceManager
-            // unsigned bufferID = sourceManager->addNewSourceBuffer(std::move(buffer));
+            auto &sourceManager = compilerInstance->getSourceMgr();
+            unsigned bufferID = sourceManager.addNewSourceBuffer(std::move(buffer));
             
-            // // Create SourceFile
-            // auto sourceFile = new swift::SourceFile(
-            //     *module, 
-            //     swift::SourceFileKind::Library, 
-            //     bufferID,
-            //     swift::SourceFile::getDefaultParsingOptions(compilerInstance->getASTContext().LangOpts),
-            //     false  // not primary
-            // );
-            
-            // // Parse the source file
-            // swift::Parser parser(bufferID, *sourceFile, 
-            //                    &compilerInstance->getDiagnosticEngine(), 
-            //                    nullptr, nullptr);
-            
-            // llvm::SmallVector<swift::ASTNode> items;
-            // parser.parseTopLevelItems(items);
-            // sourceFile->Items = std::move(items);
-            
-            // sourceFiles.push_back(source_code);
+            // Let the compiler instance handle the rest of the processing
+            // For now, just track that we added the source file
+            sourceFiles.push_back(source_code);
             return true;
-            
         } catch (const std::exception& e) {
             lastError = e.what();
             return false;
@@ -232,15 +193,13 @@ public:
     bool reset() {
         try {
             // Reset Swift compiler state
-            if (swiftJIT) {
-                swiftJIT.reset();
-            }
             if (compilerInstance) {
+                compilerInstance->freeASTContext();
                 compilerInstance.reset();
             }
-            // if (module) {
-            //     module->reset();
-            // }
+            if (llvmContext) {
+                llvmContext.reset();
+            }
             
             // Clear source files and reset state
             sourceFiles.clear();
@@ -280,7 +239,7 @@ public:
 
 // Static member initialization
 std::mutex SwiftJITREPL::Impl::initMutex;
-bool SwiftJITREPL::Impl::swiftInitialized = false;
+bool SwiftJITREPL::Impl::llvmInitialized = false;
 
 // SwiftJITREPL implementation
 SwiftJITREPL::SwiftJITREPL(const REPLConfig& config) : pImpl(std::make_unique<Impl>(config)) {}
@@ -289,6 +248,10 @@ SwiftJITREPL::~SwiftJITREPL() = default;
 
 bool SwiftJITREPL::initialize() {
     return pImpl->initialize();
+}
+
+bool SwiftJITREPL::isInitialized() const {
+    return pImpl->isInitialized();
 }
 
 EvaluationResult SwiftJITREPL::evaluate(const std::string& expression) {
@@ -311,10 +274,6 @@ std::string SwiftJITREPL::getLastError() const {
     return pImpl->getLastError();
 }
 
-bool SwiftJITREPL::isInitialized() const {
-    return pImpl->isInitialized();
-}
-
 SwiftJITREPL::CompilationStats SwiftJITREPL::getStats() const {
     return pImpl->getStats();
 }
@@ -322,7 +281,31 @@ SwiftJITREPL::CompilationStats SwiftJITREPL::getStats() const {
 bool SwiftJITREPL::isSwiftJITAvailable() {
     // Check if Swift JIT is available by attempting to create a minimal instance
     try {
-        // This is a simplified check - in practice you'd want to verify the libraries are available
+        // Create a minimal Swift compiler instance to test availability
+        auto compilerInstance = std::make_unique<swift::CompilerInstance>();
+        
+        // Create and configure the compiler invocation for JIT mode
+        swift::CompilerInvocation invocation;
+        
+        // Set up language options for JIT mode
+        invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
+        invocation.getLangOptions().EnableObjCInterop = false;
+        
+        // Set up frontend options for JIT mode
+        invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::REPL;
+        
+        // Set up SIL options
+        invocation.getSILOptions().OptMode = swift::OptimizationMode::NoOptimization;
+        
+        // Set up IRGen options
+        invocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
+        
+        // Set up the compiler instance
+        std::string error;
+        if (!compilerInstance->setup(invocation, error)) {
+            return false;
+        }
+        
         return true;
     } catch (...) {
         return false;
