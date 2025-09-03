@@ -8,6 +8,9 @@ set(CMAKE_CXX_COMPILER clang++)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Find required packages
+find_package(Threads REQUIRED)
+
 # Set Swift compiler paths
 set(SWIFT_SOURCE_DIR "${CMAKE_SOURCE_DIR}/..")
 set(SWIFT_BUILD_DIR "/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert")
@@ -43,16 +46,39 @@ include_directories(
 # No external library dependencies for now - compile standalone
 # This will be expanded once we resolve the complex linking issues
 
-# Swift library components (minimal set for JIT functionality)
+# Use Swift's component-based system instead of static library paths
+# This automatically handles dependencies and linking order
+set(Swift_DIR "${SWIFT_BUILD_SWIFT}/lib/cmake/swift")
+find_package(Threads REQUIRED)
+find_package(Swift REQUIRED CONFIG)
+
+# Swift library components for JIT functionality
+# These are CMake targets that automatically resolve dependencies
 set(SWIFT_LIBRARIES
-    # Core JIT library
-    "${SWIFT_BUILD_SWIFT}/lib/libswiftImmediate.a"
-    # Core parsing and AST libraries
-    "${SWIFT_BUILD_SWIFT}/lib/libswiftParse.a"
-    "${SWIFT_BUILD_SWIFT}/lib/libswiftAST.a"
-    "${SWIFT_BUILD_SWIFT}/lib/libswiftBasic.a"
-    "${SWIFT_BUILD_SWIFT}/lib/libswiftSema.a"
-    "${SWIFT_BUILD_SWIFT}/lib/libswiftSIL.a"
+    # Core JIT library - this is the main library we need
+    swiftImmediate
+    
+    # Basic Swift infrastructure
+    swiftBasic
+    swiftParse
+    swiftAST
+    swiftSema
+    
+    # SIL (Swift Intermediate Language) - needed for compilation
+    swiftSIL
+    swiftSILGen
+    
+    # IR Generation - needed for JIT
+    swiftIRGen
+    
+    # Frontend - needed for compiler instance
+    swiftFrontend
+    
+    # Demangling - needed for symbol resolution
+    swiftDemangling
+    
+    # Options - needed for compiler configuration
+    swiftOption
 )
 
 # Use LLVM's built-in component resolution - this is the correct approach
@@ -136,6 +162,12 @@ set(LLVM_COMPONENTS
     MCJIT
     RuntimeDyld
     
+    # ORC (On-Request Compilation) components for modern JIT
+    OrcJIT
+    OrcShared
+    OrcTargetProcess
+    OrcDebugging
+    
     # Additional components
     BitReader
     BitWriter
@@ -149,9 +181,19 @@ llvm_map_components_to_libnames(LLVM_LIBRARIES ${LLVM_COMPONENTS})
 # Debug: Print the resolved libraries
 message(STATUS "LLVM_LIBRARIES resolved to: ${LLVM_LIBRARIES}")
 
-# Clang library components (none for now - too complex)
+# Clang library components (minimal set needed by Swift)
+# Note: For basic Swift JIT functionality, we may not need Clang at all
+# Swift can work without Clang for simple JIT operations
 set(CLANG_LIBRARIES
-    # No Clang libraries for now - they have too many interdependencies
+    # Temporarily disable Clang libraries to test if Swift JIT works without them
+    # "${SWIFT_BUILD_LLVM}/lib/libclangBasic.a"
+    # "${SWIFT_BUILD_LLVM}/lib/libclangLex.a"
+    # "${SWIFT_BUILD_LLVM}/lib/libclangParse.a"
+    # "${SWIFT_BUILD_LLVM}/lib/libclangAST.a"
+    # "${SWIFT_BUILD_LLVM}/lib/libclangSema.a"
+    # "${SWIFT_BUILD_LLVM}/lib/libclangSerialization.a"
+    # "${SWIFT_BUILD_LLVM}/lib/libclangFrontend.a"
+    # "${SWIFT_BUILD_LLVM}/lib/libclangDriver.a"
 )
 
 # Create the main library
@@ -168,11 +210,13 @@ target_compile_definitions(SwiftJITREPL PRIVATE
     LLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORCING=1
 )
 
-# Link libraries
+
+
+# Link libraries - ensure proper order to resolve ABI breaking checks
 target_link_libraries(SwiftJITREPL PRIVATE
     ${SWIFT_LIBRARIES}
-    ${LLVM_LIBRARIES}
     ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
     pthread
 )
 
@@ -183,6 +227,18 @@ add_executable(swift_jit_example
 
 target_link_libraries(swift_jit_example PRIVATE
     SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+)
+
+# Set target properties
+target_compile_features(swift_jit_example PRIVATE cxx_std_17)
+
+# Disable ABI breaking checks enforcement to avoid linking libSupport
+# See: llvm-project/llvm/include/llvm/Config/abi-breaking.h.cmake
+target_compile_definitions(swift_jit_example PRIVATE
+    LLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORCING=1
 )
 
 # Create test executable
