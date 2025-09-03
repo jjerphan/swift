@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(SwiftJITREPL)
 
+# Use clang and clang++ as preferred compilers
+set(CMAKE_C_COMPILER clang)
+set(CMAKE_CXX_COMPILER clang++)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -51,12 +55,99 @@ set(SWIFT_LIBRARIES
     "${SWIFT_BUILD_SWIFT}/lib/libswiftSIL.a"
 )
 
-# LLVM library components (minimal set)
-set(LLVM_LIBRARIES
-    # Only the most basic LLVM libraries
-    "${SWIFT_BUILD_LLVM}/lib/libLLVMCore.a"
-    "${SWIFT_BUILD_LLVM}/lib/libLLVMSupport.a"
+# Use LLVM's built-in component resolution - this is the correct approach
+# It automatically handles dependency ordering and resolves circular dependencies
+find_package(LLVM REQUIRED CONFIG)
+
+# Define ALL LLVM components needed for Swift JIT
+# Since Swift JIT calls InitializeAllTargets(), we need ALL target components
+set(LLVM_COMPONENTS
+    # Core components (base dependencies)
+    Core
+    Support
+    Demangle
+    BinaryFormat
+    TargetParser
+    
+    # MC (Machine Code) components
+    MC
+    MCParser
+    MCDisassembler
+    Object
+    
+    # ALL Target components - Swift JIT calls InitializeAllTargets()
+    ARMDesc
+    ARMInfo
+    ARMAsmParser
+    ARMCodeGen
+    ARMDisassembler
+    
+    AArch64Desc
+    AArch64Info
+    AArch64AsmParser
+    AArch64CodeGen
+    AArch64Disassembler
+    
+    PowerPCDesc
+    PowerPCInfo
+    PowerPCAsmParser
+    PowerPCCodeGen
+    PowerPCDisassembler
+    
+    SystemZDesc
+    SystemZInfo
+    SystemZAsmParser
+    SystemZCodeGen
+    SystemZDisassembler
+    
+    MipsDesc
+    MipsInfo
+    MipsAsmParser
+    MipsCodeGen
+    MipsDisassembler
+    
+    RISCVDesc
+    RISCVInfo
+    RISCVAsmParser
+    RISCVCodeGen
+    RISCVDisassembler
+    
+    WebAssemblyDesc
+    WebAssemblyInfo
+    WebAssemblyAsmParser
+    WebAssemblyCodeGen
+    WebAssemblyDisassembler
+    
+    AVRDesc
+    AVRInfo
+    AVRAsmParser
+    AVRCodeGen
+    AVRDisassembler
+    
+    # X86 target components (our primary target)
+    X86Desc
+    X86Info
+    X86AsmParser
+    X86CodeGen
+    X86Disassembler
+    
+    # Execution engine components for JIT functionality
+    ExecutionEngine
+    MCJIT
+    RuntimeDyld
+    
+    # Additional components
+    BitReader
+    BitWriter
+    ProfileData
 )
+
+# Let LLVM resolve the dependencies and provide the correct library list
+# This automatically handles the complex dependency ordering
+llvm_map_components_to_libnames(LLVM_LIBRARIES ${LLVM_COMPONENTS})
+
+# Debug: Print the resolved libraries
+message(STATUS "LLVM_LIBRARIES resolved to: ${LLVM_LIBRARIES}")
 
 # Clang library components (none for now - too complex)
 set(CLANG_LIBRARIES
@@ -70,6 +161,12 @@ add_library(SwiftJITREPL STATIC
 
 # Set target properties
 target_compile_features(SwiftJITREPL PRIVATE cxx_std_17)
+
+# Disable ABI breaking checks enforcement to avoid linking libSupport
+# See: llvm-project/llvm/include/llvm/Config/abi-breaking.h.cmake
+target_compile_definitions(SwiftJITREPL PRIVATE
+    LLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORCING=1
+)
 
 # Link libraries
 target_link_libraries(SwiftJITREPL PRIVATE
