@@ -8,9 +8,6 @@ set(CMAKE_CXX_COMPILER clang++)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find required packages
-find_package(Threads REQUIRED)
-
 # Set Swift compiler paths
 set(SWIFT_SOURCE_DIR "${CMAKE_SOURCE_DIR}/..")
 set(SWIFT_BUILD_DIR "/home/jjerphan/dev/build/Ninja-RelWithDebInfoAssert")
@@ -51,6 +48,7 @@ include_directories(
 set(Swift_DIR "${SWIFT_BUILD_SWIFT}/lib/cmake/swift")
 find_package(Threads REQUIRED)
 find_package(Swift REQUIRED CONFIG)
+find_package(LLVM REQUIRED CONFIG)
 
 # Swift library components for JIT functionality
 # These are CMake targets that automatically resolve dependencies
@@ -58,27 +56,32 @@ set(SWIFT_LIBRARIES
     # Core JIT library - this is the main library we need
     swiftImmediate
     
-    # Basic Swift infrastructure
+    # Swift runtime library - needed for Swift runtime symbols
+    "${SWIFT_BUILD_SWIFT}/lib/swift/linux/libswiftCore.so"
+    
+    # Basic Swift infrastructure - needed for CompilerInstance
     swiftBasic
     swiftParse
     swiftAST
     swiftSema
     
-    # SIL (Swift Intermediate Language) - needed for compilation
+    # SIL libraries - needed for SILModule functions
     swiftSIL
     swiftSILGen
+    swiftSILOptimizer
     
-    # IR Generation - needed for JIT
-    swiftIRGen
-    
-    # Frontend - needed for compiler instance
+    # Frontend - needed for CompilerInstance::setup and performSema
     swiftFrontend
     
-    # Demangling - needed for symbol resolution
-    swiftDemangling
+    # IRGen - needed for IR generation functions
+    swiftIRGen
     
-    # Options - needed for compiler configuration
+    # Additional utilities
+    swiftDemangling
     swiftOption
+    swiftSerialization
+    swiftDriver
+    swiftClangImporter
 )
 
 # Use LLVM's built-in component resolution - this is the correct approach
@@ -94,6 +97,9 @@ set(LLVM_COMPONENTS
     Demangle
     BinaryFormat
     TargetParser
+    
+    # CAS (Content Addressable Storage) components
+    CAS
     
     # MC (Machine Code) components
     MC
@@ -185,15 +191,27 @@ message(STATUS "LLVM_LIBRARIES resolved to: ${LLVM_LIBRARIES}")
 # Note: For basic Swift JIT functionality, we may not need Clang at all
 # Swift can work without Clang for simple JIT operations
 set(CLANG_LIBRARIES
-    # Temporarily disable Clang libraries to test if Swift JIT works without them
-    # "${SWIFT_BUILD_LLVM}/lib/libclangBasic.a"
-    # "${SWIFT_BUILD_LLVM}/lib/libclangLex.a"
-    # "${SWIFT_BUILD_LLVM}/lib/libclangParse.a"
-    # "${SWIFT_BUILD_LLVM}/lib/libclangAST.a"
-    # "${SWIFT_BUILD_LLVM}/lib/libclangSema.a"
-    # "${SWIFT_BUILD_LLVM}/lib/libclangSerialization.a"
-    # "${SWIFT_BUILD_LLVM}/lib/libclangFrontend.a"
-    # "${SWIFT_BUILD_LLVM}/lib/libclangDriver.a"
+    # Clang libraries required by swiftImmediate
+    clangBasic
+    clangLex
+    clangParse
+    clangAST
+    clangSema
+    clangSerialization
+    clangFrontend
+    clangDriver
+    clangAnalysis
+    clangEdit
+    clangRewrite
+    clangRewriteFrontend
+    clangCodeGen
+    clangIndex
+    clangFormat
+    clangTooling
+    clangToolingCore
+    clangFrontendTool
+    clangDependencyScanning
+    clangAPINotes
 )
 
 # Create the main library
@@ -210,15 +228,18 @@ target_compile_definitions(SwiftJITREPL PRIVATE
     LLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORCING=1
 )
 
-
-
 # Link libraries - ensure proper order to resolve ABI breaking checks
+# LLVM Support must come first to provide ABI breaking checks symbols
 target_link_libraries(SwiftJITREPL PRIVATE
+    ${LLVM_LIBRARIES}
     ${SWIFT_LIBRARIES}
     ${CLANG_LIBRARIES}
-    ${LLVM_LIBRARIES}
     pthread
 )
+
+# Add Clang library directory to linker search paths
+# This is needed because Swift libraries reference Clang libraries with -l flags
+link_directories("${SWIFT_BUILD_LLVM}/lib")
 
 # Create example executable
 add_executable(swift_jit_example
@@ -227,9 +248,9 @@ add_executable(swift_jit_example
 
 target_link_libraries(swift_jit_example PRIVATE
     SwiftJITREPL
+    ${LLVM_LIBRARIES}
     ${SWIFT_LIBRARIES}
     ${CLANG_LIBRARIES}
-    ${LLVM_LIBRARIES}
 )
 
 # Set target properties
