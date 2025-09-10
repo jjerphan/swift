@@ -23,16 +23,18 @@ This REPL uses the same infrastructure as Swift's `-interpret` mode:
 4. **JIT Compilation**: Uses LLVM's ORC JIT to compile IR to machine code
 5. **Execution**: Directly executes the compiled machine code
 
-## Comparison with LLDB-Based Approach
+## Architecture Overview
 
-| Feature | LLDB-Based (swift_minimal_repl) | JIT-Based (swift_jit_repl) |
-|---------|----------------------------------|----------------------------|
-| **Performance** | Slower (debugging overhead) | Faster (direct compilation) |
-| **Architecture** | Complex (debugger + target + process) | Simple (compiler + JIT) |
-| **Dependencies** | LLDB, debugging infrastructure | Swift compiler only |
-| **Memory Usage** | Higher (debugger processes) | Lower (in-process compilation) |
-| **Startup Time** | Slower (process creation) | Faster (no process overhead) |
-| **Error Handling** | Limited (debugger constraints) | Rich (compiler diagnostics) |
+This JIT-based Swift REPL provides a clean, high-performance alternative to traditional LLDB-based approaches:
+
+| Feature | JIT-Based (swift_jit_repl) |
+|---------|----------------------------|
+| **Performance** | Faster (direct compilation) |
+| **Architecture** | Simple (compiler + JIT) |
+| **Dependencies** | Swift compiler only |
+| **Memory Usage** | Lower (in-process compilation) |
+| **Startup Time** | Faster (no process overhead) |
+| **Error Handling** | Rich (compiler diagnostics) |
 
 ## Current Status
 
@@ -383,9 +385,8 @@ This project follows the same license as the Swift project.
 
 ## Related Projects
 
-- **swift_minimal_repl**: LLDB-based Swift REPL implementation
-- **cpp_minimal_repl**: C++ REPL using LLDB
 - **Swift Compiler**: The underlying Swift compiler infrastructure
+- **LLVM ORC JIT**: The JIT compilation framework used by this project
 
 ## Acknowledgments
 
