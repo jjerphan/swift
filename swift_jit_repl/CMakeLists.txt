@@ -107,7 +107,7 @@ try:
     runtime_paths = paths.get('runtimeLibraryPaths', [])
     import_paths = paths.get('runtimeLibraryImportPaths', [])
     resource_path = paths.get('runtimeResourcePath', '')
-    
+
     print('RUNTIME_PATHS=' + ';'.join(runtime_paths))
     print('IMPORT_PATHS=' + ';'.join(import_paths))
     print('RESOURCE_PATH=' + resource_path)
@@ -125,21 +125,21 @@ if(SWIFT_PATHS_RESULT EQUAL 0)
     string(REGEX MATCH "RUNTIME_PATHS=([^\n\r]*)" SWIFT_RUNTIME_MATCH "${SWIFT_PATHS_OUTPUT}")
     string(REGEX MATCH "IMPORT_PATHS=([^\n\r]*)" SWIFT_IMPORT_MATCH "${SWIFT_PATHS_OUTPUT}")
     string(REGEX MATCH "RESOURCE_PATH=([^\n\r]*)" SWIFT_RESOURCE_MATCH "${SWIFT_PATHS_OUTPUT}")
-    
+
     if(SWIFT_RUNTIME_MATCH)
         string(REGEX REPLACE ".*RUNTIME_PATHS=([^\n\r]*).*" "\\1" SWIFT_RUNTIME_PATHS "${SWIFT_PATHS_OUTPUT}")
         message(STATUS "Swift runtime library paths: ${SWIFT_RUNTIME_PATHS}")
     else()
         set(SWIFT_RUNTIME_PATHS "${SWIFT_BUILD_SWIFT}/lib/swift/linux")
     endif()
-    
+
     if(SWIFT_IMPORT_MATCH)
         string(REGEX REPLACE ".*IMPORT_PATHS=([^\n\r]*).*" "\\1" SWIFT_IMPORT_PATHS "${SWIFT_PATHS_OUTPUT}")
         message(STATUS "Swift import paths: ${SWIFT_IMPORT_PATHS}")
     else()
         set(SWIFT_IMPORT_PATHS "${SWIFT_BUILD_SWIFT}/lib/swift/linux" "${SWIFT_BUILD_SWIFT}/lib/swift/linux/x86_64")
     endif()
-    
+
     if(SWIFT_RESOURCE_MATCH)
         string(REGEX REPLACE ".*RESOURCE_PATH=([^\n\r]*).*" "\\1" SWIFT_RESOURCE_PATH "${SWIFT_PATHS_OUTPUT}")
         message(STATUS "Swift resource path: ${SWIFT_RESOURCE_PATH}")
@@ -160,24 +160,24 @@ file(REMOVE "${CMAKE_BINARY_DIR}/swift_target_info.json")
 include_directories(
     # Swift source headers (primary)
     "${SWIFT_SOURCE_DIR}/include"
-    
+
     # Swift build headers
     "${SWIFT_BUILD_SWIFT}/include"
-    
+
     # LLVM build headers
     "${SWIFT_BUILD_LLVM}/include"
-    
+
     # LLVM source headers (fallback)
     "${LLVM_SOURCE_DIR}/include"
-    
+
     # Clang headers (required by Swift)
     "${CLANG_SOURCE_DIR}/include"
     "${SWIFT_BUILD_LLVM}/tools/clang/include"
-    
+
     # Additional Swift include paths
     "${SWIFT_SOURCE_DIR}/lib"
     "${SWIFT_BUILD_SWIFT}/lib"
-    
+
     # Dynamically discovered Swift import paths
     # These are the search paths where Swift modules can be imported from.
     # Used by the Swift compiler to resolve 'import' statements in Swift code.

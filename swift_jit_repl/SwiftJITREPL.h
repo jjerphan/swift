@@ -5,15 +5,24 @@
 #include <vector>
 #include <optional>
 #include <functional>
+#include <list>
+#include <map>
+
+// Forward declarations for LLVM types
+namespace llvm {
+    template<typename T> class IntrusiveRefCntPtr;
+}
 
 // Forward declarations for Swift types
 namespace swift {
     class CompilerInstance;
     class Module;
+    class ModuleDecl;
     class SourceFile;
     class Decl;
     class Expr;
     class Stmt;
+    class ASTContext;
 }
 
 // Forward declarations for LLVM types
@@ -21,6 +30,18 @@ namespace llvm {
     class Module;
     class Function;
     class Value;
+    class LLVMContext;
+    class StringRef;
+    template<typename T> class Expected;
+    class Error;
+    namespace orc {
+        class LLJIT;
+        class LLJITBuilder;
+        class ThreadSafeContext;
+        class ExecutorAddr;
+        class ResourceTracker;
+        using ResourceTrackerSP = IntrusiveRefCntPtr<ResourceTracker>;
+    }
 }
 
 namespace SwiftJITREPL {
@@ -41,6 +62,105 @@ struct EvaluationResult {
     // Constructor for failed evaluation
     explicit EvaluationResult(const std::string& error) 
         : success(false), error_message(error) {}
+};
+
+/**
+ * Swift-specific partial translation unit (inspired by Clang's PartialTranslationUnit)
+ * Represents a piece of Swift code that has been parsed and compiled incrementally
+ */
+struct SwiftPartialTranslationUnit {
+    swift::ModuleDecl *ModulePart = nullptr;
+    std::unique_ptr<llvm::Module> TheModule;
+    std::string InputCode;
+    
+    bool operator==(const SwiftPartialTranslationUnit &other) const {
+        return other.ModulePart == ModulePart && other.TheModule == TheModule;
+    }
+};
+
+/**
+ * Swift incremental parser (inspired by Clang's IncrementalParser)
+ * Handles incremental parsing of Swift code without requiring a main function
+ */
+class SwiftIncrementalParser {
+private:
+    std::unique_ptr<swift::CompilerInstance> CI;
+    std::list<SwiftPartialTranslationUnit> PTUs;
+    unsigned InputCount = 0;
+    
+public:
+    SwiftIncrementalParser(std::unique_ptr<swift::CompilerInstance> Instance);
+    ~SwiftIncrementalParser();
+    
+    // Parse incremental Swift input and return a partial translation unit
+    llvm::Expected<SwiftPartialTranslationUnit&> Parse(llvm::StringRef Input);
+    
+    // Get all parsed translation units
+    std::list<SwiftPartialTranslationUnit>& getPTUs() { return PTUs; }
+    
+    // Clean up a specific PTU
+    void CleanUpPTU(SwiftPartialTranslationUnit& PTU);
+    
+    // Get the compiler instance
+    swift::CompilerInstance* getCI() { return CI.get(); }
+};
+
+/**
+ * Swift incremental executor (inspired by Clang's IncrementalExecutor)
+ * Manages JIT execution of partial translation units
+ */
+class SwiftIncrementalExecutor {
+private:
+    std::unique_ptr<llvm::orc::LLJIT> Jit;
+    llvm::orc::ThreadSafeContext& TSCtx;
+    std::map<const SwiftPartialTranslationUnit*, llvm::orc::ResourceTrackerSP> ResourceTrackers;
+    
+public:
+    SwiftIncrementalExecutor(llvm::orc::ThreadSafeContext& TSC, 
+                            std::unique_ptr<llvm::orc::LLJIT> JIT);
+    ~SwiftIncrementalExecutor();
+    
+    // Add a partial translation unit to the JIT
+    llvm::Error addModule(SwiftPartialTranslationUnit& PTU);
+    
+    // Remove a partial translation unit from the JIT
+    llvm::Error removeModule(SwiftPartialTranslationUnit& PTU);
+    
+    // Execute the JIT'd code
+    llvm::Error execute();
+    
+    // Get symbol address
+    llvm::Expected<llvm::orc::ExecutorAddr> getSymbolAddress(llvm::StringRef Name) const;
+    
+    // Get the execution engine
+    llvm::orc::LLJIT& GetExecutionEngine() { return *Jit; }
+};
+
+/**
+ * Main Swift interpreter class (inspired by Clang's Interpreter)
+ * Provides the main interface for incremental Swift code execution
+ */
+class SwiftInterpreter {
+private:
+    std::unique_ptr<llvm::orc::ThreadSafeContext> TSCtx;
+    std::unique_ptr<SwiftIncrementalParser> IncrParser;
+    std::unique_ptr<SwiftIncrementalExecutor> IncrExecutor;
+    
+public:
+    SwiftInterpreter(std::unique_ptr<swift::CompilerInstance> CI);
+    ~SwiftInterpreter();
+    
+    // Parse and execute Swift code incrementally
+    llvm::Error ParseAndExecute(llvm::StringRef Code);
+    
+    // Get the AST context
+    swift::ASTContext& getASTContext();
+    
+    // Get the compiler instance
+    swift::CompilerInstance* getCompilerInstance();
+    
+    // Get the execution engine
+    llvm::Expected<llvm::orc::LLJIT&> getExecutionEngine();
 };
 
 /**
