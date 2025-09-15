@@ -23,8 +23,33 @@
 // Swift compiler includes (minimal set)
 #include "swift/Frontend/Frontend.h"
 #include "swift/Immediate/Immediate.h"
+#include "swift/Parse/Lexer.h"
 
 namespace SwiftJITREPL {
+
+/**
+ * Helper function to validate Swift identifiers
+ */
+static bool isValidSwiftIdentifier(const std::string& identifier) {
+    return swift::Lexer::isIdentifier(identifier);
+}
+
+/**
+ * Get a valid Swift module name
+ */
+static std::string getValidModuleName() {
+    // Try common valid identifiers
+    std::vector<std::string> candidates = {"main", "SwiftJITREPL", "repl", "swiftrepl", "module"};
+    
+    for (const auto& candidate : candidates) {
+        if (isValidSwiftIdentifier(candidate)) {
+            return candidate;
+        }
+    }
+    
+    // Fallback to a simple valid identifier
+    return "main";
+}
 
 /**
  * Private implementation class (PIMPL idiom)
@@ -84,8 +109,18 @@ public:
             invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
             invocation.getLangOptions().EnableObjCInterop = false;
             
-            // Set up frontend options for JIT mode
-            invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::REPL;
+            // Set up frontend options for immediate mode (not REPL)
+            invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Immediate;
+            
+            // Set up command line arguments for immediate mode
+            std::vector<std::string> immediateArgs = {"swift", "-i"};
+            invocation.getFrontendOptions().ImmediateArgv = immediateArgs;
+            
+            // Set a valid module name (required for CompilerInstance::setup)
+            std::string moduleName = getValidModuleName();
+            std::cout << "DEBUG: initialize - Setting module name to: '" << moduleName << "'" << std::endl;
+            std::cout << "DEBUG: initialize - Is valid identifier: " << (isValidSwiftIdentifier(moduleName) ? "true" : "false") << std::endl;
+            invocation.getFrontendOptions().ModuleName = moduleName;
             
             // Set up SIL options
             invocation.getSILOptions().OptMode = swift::OptimizationMode::NoOptimization;
@@ -117,21 +152,56 @@ public:
         auto start_time = std::chrono::high_resolution_clock::now();
         
         try {
-            // For REPL mode, we can use the Swift compiler's built-in immediate mode
-            // Create a temporary file with the expression and use RunImmediatelyFromAST
+            // Use Swift's immediate mode with a temporary file approach
+            // This ensures the source gets properly parsed into a SourceFile
+            std::string tempFileName = "/tmp/swift_repl_" + std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()) + ".swift";
             
-            // 1. Create MemoryBuffer from code string
-            auto buffer = llvm::MemoryBuffer::getMemBuffer(expression, "repl_input");
-            if (!buffer) {
-                return EvaluationResult("Failed to create memory buffer");
+            // Write expression to temporary file
+            std::ofstream tempFile(tempFileName);
+            if (!tempFile.is_open()) {
+                return EvaluationResult("Failed to create temporary file");
             }
+            tempFile << expression;
+            tempFile.close();
             
-            // 2. Add to SourceManager
-            auto &sourceManager = compilerInstance->getSourceMgr();
-            unsigned bufferID = sourceManager.addNewSourceBuffer(std::move(buffer));
+            // Create a new CompilerInstance for this evaluation
+            auto tempCompiler = std::make_unique<swift::CompilerInstance>();
             
-            // 3. Use the Swift compiler's immediate execution
-            int result = swift::RunImmediatelyFromAST(*compilerInstance);
+            // Copy the working configuration from the main compiler instance
+            auto invocation = compilerInstance->getInvocation();
+            invocation.getFrontendOptions().InputsAndOutputs.addInputFile(tempFileName);
+            
+            // Debug: Print search paths
+            auto &searchPaths = invocation.getSearchPathOptions();
+            std::cout << "DEBUG: RuntimeLibraryPaths: ";
+            for (const auto &path : searchPaths.RuntimeLibraryPaths) {
+                std::cout << path << " ";
+            }
+            std::cout << std::endl;
+            std::cout << "DEBUG: RuntimeLibraryImportPaths: ";
+            for (const auto &path : searchPaths.getRuntimeLibraryImportPaths()) {
+                std::cout << path << " ";
+            }
+            std::cout << std::endl;
+            std::cout << "DEBUG: RuntimeResourcePath: " << searchPaths.RuntimeResourcePath << std::endl;
+            std::cout << "DEBUG: SDKPath: " << searchPaths.getSDKPath().str() << std::endl;
+            
+            // Set up the compiler instance
+            std::string error;
+            std::cout << "DEBUG: About to call tempCompiler->setup()" << std::endl;
+            if (!tempCompiler->setup(invocation, error)) {
+                std::cout << "DEBUG: tempCompiler->setup() failed with error: '" << error << "'" << std::endl;
+                std::remove(tempFileName.c_str());
+                return EvaluationResult("Failed to setup Swift compiler instance: " + error);
+            }
+            std::cout << "DEBUG: tempCompiler->setup() succeeded" << std::endl;
+            
+            // Use the Swift compiler's immediate execution
+            std::cout << "DEBUG: About to call RunImmediatelyFromAST with file: " << tempFileName << std::endl;
+            int result = swift::RunImmediatelyFromAST(*tempCompiler);
+            
+            // Clean up temporary file
+            std::remove(tempFileName.c_str());
             
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
@@ -291,8 +361,18 @@ bool SwiftJITREPL::isSwiftJITAvailable() {
         invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
         invocation.getLangOptions().EnableObjCInterop = false;
         
-        // Set up frontend options for JIT mode
-        invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::REPL;
+        // Set up frontend options for immediate mode (not REPL)
+        invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Immediate;
+        
+        // Set up command line arguments for immediate mode
+        std::vector<std::string> immediateArgs = {"swift", "-i"};
+        invocation.getFrontendOptions().ImmediateArgv = immediateArgs;
+        
+        // Set a valid module name (required for CompilerInstance::setup)
+        std::string moduleName = getValidModuleName();
+        std::cout << "DEBUG: isSwiftJITAvailable - Setting module name to: '" << moduleName << "'" << std::endl;
+        std::cout << "DEBUG: isSwiftJITAvailable - Is valid identifier: " << (isValidSwiftIdentifier(moduleName) ? "true" : "false") << std::endl;
+        invocation.getFrontendOptions().ModuleName = moduleName;
         
         // Set up SIL options
         invocation.getSILOptions().OptMode = swift::OptimizationMode::NoOptimization;
