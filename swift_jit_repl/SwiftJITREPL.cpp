@@ -9,6 +9,7 @@
 #include <sstream>
 #include <algorithm>
 #include <thread>
+#include <vector>
 
 // Basic LLVM includes only
 #include "llvm/ADT/StringRef.h"
@@ -118,8 +119,6 @@ public:
             
             // Set a valid module name (required for CompilerInstance::setup)
             std::string moduleName = getValidModuleName();
-            std::cout << "DEBUG: initialize - Setting module name to: '" << moduleName << "'" << std::endl;
-            std::cout << "DEBUG: initialize - Is valid identifier: " << (isValidSwiftIdentifier(moduleName) ? "true" : "false") << std::endl;
             invocation.getFrontendOptions().ModuleName = moduleName;
             
             // Set up SIL options
@@ -128,10 +127,17 @@ public:
             // Set up IRGen options
             invocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
             
+            // Set the correct search paths for Swift standard library using compile-time definitions
+            auto &searchPaths = invocation.getSearchPathOptions();
+            searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
+            searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+            searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
+            searchPaths.setSDKPath(SWIFT_SDK_PATH);
+            
             // Set up the compiler instance
             std::string error;
-            if (!compilerInstance->setup(invocation, error)) {
-                lastError = "Failed to setup Swift compiler instance: " + error;
+            if (compilerInstance->setup(invocation, error)) {
+                lastError = "Failed to setup Swift compiler instance: " + (error.empty() ? "Unknown error" : error);
                 return false;
             }
             
@@ -171,33 +177,21 @@ public:
             auto invocation = compilerInstance->getInvocation();
             invocation.getFrontendOptions().InputsAndOutputs.addInputFile(tempFileName);
             
-            // Debug: Print search paths
+            // Set the correct search paths for Swift standard library using compile-time definitions
             auto &searchPaths = invocation.getSearchPathOptions();
-            std::cout << "DEBUG: RuntimeLibraryPaths: ";
-            for (const auto &path : searchPaths.RuntimeLibraryPaths) {
-                std::cout << path << " ";
-            }
-            std::cout << std::endl;
-            std::cout << "DEBUG: RuntimeLibraryImportPaths: ";
-            for (const auto &path : searchPaths.getRuntimeLibraryImportPaths()) {
-                std::cout << path << " ";
-            }
-            std::cout << std::endl;
-            std::cout << "DEBUG: RuntimeResourcePath: " << searchPaths.RuntimeResourcePath << std::endl;
-            std::cout << "DEBUG: SDKPath: " << searchPaths.getSDKPath().str() << std::endl;
+            searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
+            searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+            searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
+            searchPaths.setSDKPath(SWIFT_SDK_PATH);
             
             // Set up the compiler instance
             std::string error;
-            std::cout << "DEBUG: About to call tempCompiler->setup()" << std::endl;
-            if (!tempCompiler->setup(invocation, error)) {
-                std::cout << "DEBUG: tempCompiler->setup() failed with error: '" << error << "'" << std::endl;
+            if (tempCompiler->setup(invocation, error)) {
                 std::remove(tempFileName.c_str());
-                return EvaluationResult("Failed to setup Swift compiler instance: " + error);
+                return EvaluationResult("Failed to setup Swift compiler instance: " + (error.empty() ? "Unknown error" : error));
             }
-            std::cout << "DEBUG: tempCompiler->setup() succeeded" << std::endl;
             
             // Use the Swift compiler's immediate execution
-            std::cout << "DEBUG: About to call RunImmediatelyFromAST with file: " << tempFileName << std::endl;
             int result = swift::RunImmediatelyFromAST(*tempCompiler);
             
             // Clean up temporary file
@@ -370,8 +364,6 @@ bool SwiftJITREPL::isSwiftJITAvailable() {
         
         // Set a valid module name (required for CompilerInstance::setup)
         std::string moduleName = getValidModuleName();
-        std::cout << "DEBUG: isSwiftJITAvailable - Setting module name to: '" << moduleName << "'" << std::endl;
-        std::cout << "DEBUG: isSwiftJITAvailable - Is valid identifier: " << (isValidSwiftIdentifier(moduleName) ? "true" : "false") << std::endl;
         invocation.getFrontendOptions().ModuleName = moduleName;
         
         // Set up SIL options

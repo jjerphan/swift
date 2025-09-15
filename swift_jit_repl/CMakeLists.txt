@@ -35,6 +35,22 @@ set(CLANG_SOURCE_DIR "${DEV_FOLDER}/llvm-project/clang")
 set(LLVM_SOURCE_DIR "${DEV_FOLDER}/llvm-project/llvm")
 set(LLVM_PROJECT_DIR "${DEV_FOLDER}/llvm-project")
 
+# Define Swift search paths as compile-time definitions
+set(SWIFT_RUNTIME_LIBRARY_PATHS "${SWIFT_BUILD_SWIFT}/lib/swift/linux")
+set(SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 "${SWIFT_BUILD_SWIFT}/lib/swift/linux")
+set(SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 "${SWIFT_BUILD_SWIFT}/lib/swift/linux/x86_64")
+set(SWIFT_RUNTIME_RESOURCE_PATH "${SWIFT_BUILD_SWIFT}/lib/swift")
+set(SWIFT_SDK_PATH "${SWIFT_BUILD_SWIFT}")
+
+# Add compile definitions for Swift search paths
+add_compile_definitions(
+    SWIFT_RUNTIME_LIBRARY_PATHS="${SWIFT_RUNTIME_LIBRARY_PATHS}"
+    SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1="${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1}"
+    SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2="${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2}"
+    SWIFT_RUNTIME_RESOURCE_PATH="${SWIFT_RUNTIME_RESOURCE_PATH}"
+    SWIFT_SDK_PATH="${SWIFT_SDK_PATH}"
+)
+
 # Find Swift compiler in the built Swift directory
 find_program(SWIFT_COMPILER
     NAMES swiftc
