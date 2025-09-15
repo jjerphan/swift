@@ -427,6 +427,10 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
         return llvm::createStringError(llvm::inconvertibleErrorCode(), 
                                      "Failed to create temporary file");
     }
+    
+    // Write only the current input to the temporary file
+    // We cannot include previous expressions due to Swift's extension assertion error
+    // This means we lose incremental compilation but avoid crashes
     tempFile << Input.str();
     tempFile.close();
     
@@ -446,6 +450,14 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
         std::remove(tempFileName.c_str());
         return llvm::createStringError(llvm::inconvertibleErrorCode(), 
                                      "Failed to setup compiler: " + error);
+    }
+    
+    // Perform parsing and import resolution first
+    tempCompiler->performParseAndResolveImportsOnly();
+    if (tempCompiler->getASTContext().hadError()) {
+        std::remove(tempFileName.c_str());
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), 
+                                     "Parsing failed");
     }
     
     // Perform semantic analysis
