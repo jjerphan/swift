@@ -508,9 +508,7 @@ int main() {
     runner.runTest("Statistics", testStatistics);
     
     // Advanced functionality tests
-    
-    // Fails for now:
-    // runner.runTest("Incremental Compilation", testIncrementalCompilation);
+    runner.runTest("Incremental Compilation", testIncrementalCompilation);
     runner.runTest("Complex Data Types", testComplexDataTypes);
     runner.runTest("Control Flow", testControlFlow);
     runner.runTest("Functions", testFunctions);
@@ -519,11 +517,7 @@ int main() {
     runner.runTest("Optionals", testOptionals);
     runner.runTest("Generics", testGenerics);
     runner.runTest("Protocols", testProtocols);
-    
-    // The test for extensions is commented out because it causes an assertion error:
-    // swift_jit_test: /home/jjerphan/dev/swift/lib/AST/Decl.cpp:5872: void swift::NominalTypeDecl::addExtension(ExtensionDecl *): Assertion `!extension->NextExtension.getInt() && "Already added extension"' failed.
-    // runner.runTest("Extensions", testExtensions);
-    
+    runner.runTest("Extensions", testExtensions);    
     runner.runTest("Error Handling Advanced", testAdvancedErrorHandling);
     runner.runTest("Memory Management", testMemoryManagement);
     runner.runTest("Concurrency", testConcurrency);

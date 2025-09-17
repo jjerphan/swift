@@ -86,7 +86,15 @@ public:
     // Compilation state
     std::vector<std::string> sourceFiles;
     std::string currentModuleName;
+    
+    // Generate a unique module name to avoid any reuse after reset
+    static std::string generateUniqueModuleName() {
+        using namespace std::chrono;
+        auto now = duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
+        return std::string("SwiftJITREPL_") + std::to_string(now);
+    }
     unsigned inputCount = 0;
+    bool postResetPending = false;
     
     // Statistics
     SwiftJITREPL::CompilationStats stats;
@@ -133,15 +141,21 @@ public:
             std::vector<std::string> immediateArgs = {"swift", "-i"};
             invocation.getFrontendOptions().ImmediateArgv = immediateArgs;
             
-            // Set a valid module name (required for CompilerInstance::setup)
-            std::string moduleName = getValidModuleName();
+            // Set a valid and preferably unique module name
+            std::string moduleName = currentModuleName.empty() ? generateUniqueModuleName() : currentModuleName;
             invocation.getFrontendOptions().ModuleName = moduleName;
             
-            // Set up SIL options
-            invocation.getSILOptions().OptMode = swift::OptimizationMode::NoOptimization;
+            // Set up SIL options based on configuration
+            invocation.getSILOptions().OptMode = config.enable_optimizations ? 
+                swift::OptimizationMode::ForSpeed : swift::OptimizationMode::NoOptimization;
             
             // Set up IRGen options
             invocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
+            
+            // Set debug info generation based on configuration
+            if (config.generate_debug_info) {
+                invocation.getIRGenOptions().DebugInfoFormat = swift::IRGenDebugInfoFormat::DWARF;
+            }
             
             // Set the correct search paths for Swift standard library using compile-time definitions
             auto &searchPaths = invocation.getSearchPathOptions();
@@ -156,19 +170,19 @@ public:
                 lastError = "Failed to setup Swift compiler instance: " + (error.empty() ? "Unknown error" : error);
                 return false;
             }
+            // Record the actual module name used
+            currentModuleName = moduleName;
             
-        // Create the interpreter for incremental compilation
-        // We need to create a copy of the CompilerInstance for the interpreter
-        auto interpreterCI = std::make_unique<swift::CompilerInstance>();
-        auto interpreterInvocation = invocation;
-        
-        std::string interpreterError;
-        if (interpreterCI->setup(interpreterInvocation, interpreterError)) {
-            lastError = "Failed to setup interpreter compiler instance: " + interpreterError;
-            return false;
-        }
-        
-        interpreter = std::make_unique<SwiftInterpreter>(std::move(interpreterCI));
+            // Create the interpreter for incremental compilation
+            // Create a separate CompilerInstance copy for the interpreter
+            auto interpreterCI = std::make_unique<swift::CompilerInstance>();
+            auto interpreterInvocation = invocation;
+            std::string interpreterError;
+            if (interpreterCI->setup(interpreterInvocation, interpreterError)) {
+                lastError = "Failed to setup interpreter compiler instance: " + interpreterError;
+                return false;
+            }
+            interpreter = std::make_unique<SwiftInterpreter>(std::move(interpreterCI));
             
             initialized = true;
             return true;
@@ -187,42 +201,56 @@ public:
         auto start_time = std::chrono::high_resolution_clock::now();
         
         try {
-            // Use the shared CompilerInstance for incremental execution
-            // This provides true REPL functionality with persistent state
+            // Use the shared CompilerInstance path that previously passed tests
             if (!compilerInstance) {
                 lastError = "Compiler instance not initialized";
                 return EvaluationResult("Compiler instance not initialized");
             }
             
-            // Create a temporary file for this expression
             std::string tempFileName = "/tmp/swift_repl_input_" + std::to_string(++inputCount) + ".swift";
             std::ofstream tempFile(tempFileName);
             if (!tempFile.is_open()) {
                 return EvaluationResult("Failed to create temporary file");
             }
-            
             tempFile << expression;
             tempFile.close();
-            
-            // Add the input file to the shared CompilerInstance
+
+            // Preflight parse on a fresh CI. If a reset just happened, run sema too to catch
+            // unresolved identifiers (e.g., "x" after reset) before polluting shared state.
+            {
+                auto preflightCI = std::make_unique<swift::CompilerInstance>();
+                auto preflightInv = compilerInstance->getInvocation();
+                preflightInv.getFrontendOptions().InputsAndOutputs.clearInputs();
+                preflightInv.getFrontendOptions().InputsAndOutputs.addInputFile(tempFileName);
+                std::string preErr;
+                if (preflightCI->setup(preflightInv, preErr)) {
+                    std::remove(tempFileName.c_str());
+                    return EvaluationResult("Failed to setup preflight compiler: " + (preErr.empty()?std::string("unknown"):preErr));
+                }
+                // Only lex/parse normally; avoid rebinding extensions across contexts.
+                preflightCI->performParseAndResolveImportsOnly();
+                bool hadErr = preflightCI->getASTContext().hadError() || preflightCI->getDiags().hadAnyError();
+                if (!hadErr && postResetPending) {
+                    preflightCI->performSema();
+                    hadErr = preflightCI->getASTContext().hadError() || preflightCI->getDiags().hadAnyError();
+                }
+                if (hadErr) {
+                    std::remove(tempFileName.c_str());
+                    return EvaluationResult("Compilation failed");
+                }
+            }
+
             auto& invocation = const_cast<swift::CompilerInvocation&>(compilerInstance->getInvocation());
             invocation.getFrontendOptions().InputsAndOutputs.addInputFile(tempFileName);
             
-            // Parse and resolve imports in the shared context
-            compilerInstance->performParseAndResolveImportsOnly();
-            if (compilerInstance->getASTContext().hadError()) {
-                std::remove(tempFileName.c_str());
-                return EvaluationResult("Parsing failed");
-            }
-            
-            // Perform semantic analysis for the new file
             compilerInstance->performSema();
-            if (compilerInstance->getASTContext().hadError()) {
+            if (compilerInstance->getASTContext().hadError() ||
+                compilerInstance->getDiags().hadAnyError()) {
                 std::remove(tempFileName.c_str());
                 return EvaluationResult("Semantic analysis failed");
             }
-            
-            // Clean up temporary file
+            // Clear the post-reset guard after a successful first evaluation
+            postResetPending = false;
             std::remove(tempFileName.c_str());
             
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -289,7 +317,10 @@ public:
             
             // Clear source files and reset state
             sourceFiles.clear();
-            currentModuleName = "SwiftJITREPL";
+            // Force a new unique module name on next initialize
+            currentModuleName.clear();
+            inputCount = 0;  // Reset input counter
+            postResetPending = true; // enforce stricter first eval
             stats = SwiftJITREPL::CompilationStats{};
             lastError.clear();
             initialized = false;
@@ -297,7 +328,8 @@ public:
             // Reset interpreter
             interpreter.reset();
             
-            // Reinitialize
+            // Reinitialize with a fresh CompilerInstance
+            // This will create a completely new CompilerInstance with no input files
             return initialize();
             
         } catch (const std::exception& e) {
