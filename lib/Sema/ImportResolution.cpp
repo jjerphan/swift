@@ -600,7 +600,7 @@ ModuleImplicitImportsRequest::evaluate(Evaluator &evaluator,
     if (!stdlib) {
       printf("ERROR: Missing stdlib module! StdlibModuleName = '%s'\n", ctx.StdlibModuleName.str().str().c_str());
     }
-    assert(stdlib && "Missing stdlib?");
+      assert(stdlib && "Missing stdlib?");
     break;
   }
 

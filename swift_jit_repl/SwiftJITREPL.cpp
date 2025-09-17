@@ -133,21 +133,6 @@ static std::unique_ptr<llvm::Module> lowerSwiftToLLVMIR(swift::CompilerInstance*
 
 // Runtime interface code that gets injected into Swift code
 const char *const SwiftRuntimes = R"(
-    #define __SWIFT_REPL__ 1
-    import Foundation
-    
-    // Forward declarations for runtime interface functions
-    @_cdecl("__swift_Interpreter_SetValueNoAlloc")
-    func __swift_Interpreter_SetValueNoAlloc(_ this: UnsafeMutableRawPointer, 
-                                           _ outVal: UnsafeMutableRawPointer, 
-                                           _ opaqueType: UnsafeRawPointer?, 
-                                           _ value: Any) -> Void
-    
-    @_cdecl("__swift_Interpreter_SetValueWithAlloc")
-    func __swift_Interpreter_SetValueWithAlloc(_ this: UnsafeMutableRawPointer, 
-                                             _ outVal: UnsafeMutableRawPointer, 
-                                             _ opaqueType: UnsafeRawPointer?) -> UnsafeMutableRawPointer
-    
     // Global variables for the interpreter
     var interpreter: UnsafeMutableRawPointer = nil
     var lastValue: Any = ()
@@ -888,7 +873,10 @@ llvm::Error SwiftIncrementalExecutor::addModule(SwiftPartialTranslationUnit& PTU
         }
         llvm::errs() << "\n";
         
+        // Move the module to the JIT, but release it from the PTU to avoid double-deletion
         auto result = Jit->addIRModule(RT, {std::move(PTU.TheModule), TSCtx});
+        // Release the module from the PTU to prevent double-deletion
+        PTU.TheModule.release();
         if (result) {
             llvm::errs() << "[SwiftIncrementalExecutor] ERROR: Failed to add IR module to JIT: " 
                         << llvm::toString(std::move(result)) << "\n";
