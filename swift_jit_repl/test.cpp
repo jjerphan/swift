@@ -509,6 +509,36 @@ bool testAdvancedPatterns() {
     return result2.success;
 }
 
+bool testAdvancedMultiEval() {
+    SwiftJITREPL::REPLConfig config;
+    SwiftJITREPL::SwiftJITREPL repl(config);
+    if (!repl.initialize()) return false;
+
+    // 1) Generics and higher-order functions
+    if (!repl.evaluate("func mapString<T>(_ xs:[T], _ f:(T)->String) -> [String] { xs.map{ f($0) } }").success) return false;
+
+    // 2) Protocol and conforming type
+    if (!repl.evaluate("protocol P { func desc() -> String } ; struct User: P { let id:Int; let name:String; func desc() -> String { \"\\(id):\\(name)\" } }").success) return false;
+
+    // 3) Extension on a stdlib type
+    if (!repl.evaluate("extension String { func rev() -> String { String(self.reversed()) } }").success) return false;
+
+    // 4) Optionals and string processing
+    if (!repl.evaluate("func greet(_ u: User?) -> String { (u?.name ?? \"anon\").uppercased() }").success) return false;
+
+    // 5) Define values across evaluations
+    if (!repl.evaluate("let u = User(id: 7, name: \"ana\"); let arr = [1,2,3]").success) return false;
+
+    // 6) Compose previous definitions
+    if (!repl.evaluate("let s1 = greet(u); let s2 = \"abc\".rev(); let s3 = mapString(arr, { \"\\($0)\" }).joined(separator: \",\")").success) return false;
+
+    // 7) Optional chaining and collections
+    if (!repl.evaluate("let len = ([\"swift\",\"jit\"].first?.count ?? 0)").success) return false;
+
+    // 8) Use protocol method from earlier
+    auto r = repl.evaluate("u.desc() ");
+    return r.success;
+}
 int main() {
     std::cout << "=== Swift JIT REPL Comprehensive Test Suite ===\n\n";
     
@@ -549,6 +579,7 @@ int main() {
     runner.runTest("Collection Operations", testCollectionOperations);
     runner.runTest("Type Casting", testTypeCasting);
     runner.runTest("Advanced Patterns", testAdvancedPatterns);
+    runner.runTest("Advanced Multi-Eval", testAdvancedMultiEval);
     
     // Print summary
     runner.printSummary();
