@@ -307,6 +307,29 @@ bool testFunctions() {
     return result2.success;
 }
 
+bool testCrossEvaluationFunctions() {
+    SwiftJITREPL::REPLConfig config;
+    SwiftJITREPL::SwiftJITREPL repl(config);
+    
+    if (!repl.initialize()) return false;
+    
+    // Define functions across separate evaluations
+    if (!repl.evaluate("func inc(_ x: Int) -> Int { x + 1 }").success) return false;
+    if (!repl.evaluate("func add(_ a: Int, _ b: Int) -> Int { a + b }").success) return false;
+    if (!repl.evaluate("func mul(_ a: Int, _ b: Int) -> Int { a * b }").success) return false;
+    
+    // Higher-order function using previously defined ones
+    if (!repl.evaluate("func compose(_ f: @escaping (Int) -> Int, _ g: @escaping (Int) -> Int) -> (Int) -> Int { { x in f(g(x)) } }").success) return false;
+    
+    // Call them in later evaluations
+    auto r1 = repl.evaluate("inc(41)");
+    auto r2 = repl.evaluate("add(3, 4)");
+    auto r3 = repl.evaluate("compose(inc, inc)(40)");
+    auto r4 = repl.evaluate("mul(add(2, 3), inc(5))");
+    
+    return r1.success && r2.success && r3.success && r4.success;
+}
+
 bool testClassesAndStructs() {
     SwiftJITREPL::REPLConfig config;
     SwiftJITREPL::SwiftJITREPL repl(config);
@@ -512,6 +535,7 @@ int main() {
     runner.runTest("Complex Data Types", testComplexDataTypes);
     runner.runTest("Control Flow", testControlFlow);
     runner.runTest("Functions", testFunctions);
+    runner.runTest("Cross-Evaluation Functions", testCrossEvaluationFunctions);
     runner.runTest("Classes and Structs", testClassesAndStructs);
     runner.runTest("Enums", testEnums);
     runner.runTest("Optionals", testOptionals);
