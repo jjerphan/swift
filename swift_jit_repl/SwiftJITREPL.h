@@ -8,6 +8,55 @@
 #include <list>
 #include <map>
 
+// Visibility macro for runtime interface functions
+#ifdef _WIN32
+#define REPL_EXTERNAL_VISIBILITY __declspec(dllexport)
+#else
+#define REPL_EXTERNAL_VISIBILITY __attribute__((visibility("default")))
+#endif
+
+// Forward declarations for runtime interface functions
+extern "C" void REPL_EXTERNAL_VISIBILITY __swift_Interpreter_SetValueNoAlloc(
+    void *This, void *OutVal, void *OpaqueType, ...);
+
+extern "C" void REPL_EXTERNAL_VISIBILITY __swift_Interpreter_SetValueWithAlloc(
+    void *This, void *OutVal, void *OpaqueType);
+
+/**
+ * Swift-specific value class (inspired by Clang's Value)
+ * Represents the result of executing Swift code
+ */
+class SwiftValue {
+private:
+    std::string Value;
+    std::string Type;
+    bool Valid = false;
+    
+public:
+    SwiftValue() = default;
+    SwiftValue(const std::string& val, const std::string& type) 
+        : Value(val), Type(type), Valid(true) {}
+    
+    bool isValid() const { return Valid; }
+    void clear() { Value.clear(); Type.clear(); Valid = false; }
+    
+    const std::string& getValue() const { return Value; }
+    const std::string& getType() const { return Type; }
+    
+    void setValue(const std::string& val, const std::string& type) {
+        Value = val;
+        Type = type;
+        Valid = true;
+    }
+    
+    void dump() const {
+        if (Valid) {
+            // Use printf to avoid iostream dependencies
+            printf("Value: %s (Type: %s)\n", Value.c_str(), Type.c_str());
+        }
+    }
+};
+
 // Forward declarations for LLVM types
 namespace llvm {
     template<typename T> class IntrusiveRefCntPtr;
@@ -64,6 +113,7 @@ struct EvaluationResult {
         : success(false), error_message(error) {}
 };
 
+
 /**
  * Swift-specific partial translation unit (inspired by Clang's PartialTranslationUnit)
  * Represents a piece of Swift code that has been parsed and compiled incrementally
@@ -84,12 +134,12 @@ struct SwiftPartialTranslationUnit {
  */
 class SwiftIncrementalParser {
 private:
-    std::unique_ptr<swift::CompilerInstance> CI;
+    swift::CompilerInstance* CI;
     std::list<SwiftPartialTranslationUnit> PTUs;
     unsigned InputCount = 0;
     
 public:
-    SwiftIncrementalParser(std::unique_ptr<swift::CompilerInstance> Instance);
+    SwiftIncrementalParser(swift::CompilerInstance* Instance);
     ~SwiftIncrementalParser();
     
     // Parse incremental Swift input and return a partial translation unit
@@ -102,7 +152,7 @@ public:
     void CleanUpPTU(SwiftPartialTranslationUnit& PTU);
     
     // Get the compiler instance
-    swift::CompilerInstance* getCI() { return CI.get(); }
+    swift::CompilerInstance* getCI() { return CI; }
 };
 
 /**
@@ -114,6 +164,7 @@ private:
     std::unique_ptr<llvm::orc::LLJIT> Jit;
     llvm::orc::ThreadSafeContext& TSCtx;
     std::map<const SwiftPartialTranslationUnit*, llvm::orc::ResourceTrackerSP> ResourceTrackers;
+    bool Initialized = false;
     
 public:
     SwiftIncrementalExecutor(llvm::orc::ThreadSafeContext& TSC, 
@@ -132,8 +183,26 @@ public:
     // Get symbol address
     llvm::Expected<llvm::orc::ExecutorAddr> getSymbolAddress(llvm::StringRef Name) const;
     
+    // Clean up the JIT instance
+    llvm::Error cleanUp();
+    
     // Get the execution engine
     llvm::orc::LLJIT& GetExecutionEngine() { return *Jit; }
+};
+
+/**
+ * Swift Runtime Interface Builder for value capture
+ * Similar to Clang's RuntimeInterfaceBuilder
+ */
+class SwiftRuntimeInterfaceBuilder {
+public:
+    virtual ~SwiftRuntimeInterfaceBuilder() = default;
+    
+    // Function type for transforming expressions to capture values
+    using TransformExprFunction = std::function<std::string(const std::string&)>;
+    
+    // Get the print value transformer function
+    virtual TransformExprFunction* getPrintValueTransformer() = 0;
 };
 
 /**
@@ -146,12 +215,36 @@ private:
     std::unique_ptr<SwiftIncrementalParser> IncrParser;
     std::unique_ptr<SwiftIncrementalExecutor> IncrExecutor;
     
+    // Runtime interface builder for value capture
+    std::unique_ptr<SwiftRuntimeInterfaceBuilder> RuntimeIB;
+    
+    // Function pointer for adding print value calls (similar to Clang's RuntimeInterfaceBuilder)
+    using TransformExprFunction = std::function<void(llvm::Module&, llvm::Function&)>;
+    TransformExprFunction* AddPrintValueCall = nullptr;
+    
+    // Track the initial PTU size to separate runtime code from user code
+    size_t InitPTUSize = 0;
+    
 public:
-    SwiftInterpreter(std::unique_ptr<swift::CompilerInstance> CI);
+    // Last captured value (similar to Clang's LastValue)
+    SwiftValue LastValue;
+    SwiftInterpreter(swift::CompilerInstance* CI);
     ~SwiftInterpreter();
     
-    // Parse and execute Swift code incrementally
-    llvm::Error ParseAndExecute(llvm::StringRef Code);
+    // Mark the start of user code (separates runtime code from user code)
+    void markUserCodeStart();
+    
+    // Get the effective PTU size (excluding runtime PTUs)
+    size_t getEffectivePTUSize() const;
+    
+    // Undo the last N user PTUs (runtime PTUs are not affected)
+    llvm::Error Undo(unsigned N);
+    
+    // Parse and execute Swift code, returning the result value as SwiftValue
+    llvm::Error ParseAndExecute(llvm::StringRef Code, SwiftValue* V);
+    
+    // Execute a partial translation unit
+    llvm::Error Execute(SwiftPartialTranslationUnit& PTU);
     
     // Get the AST context
     swift::ASTContext& getASTContext();
@@ -161,6 +254,24 @@ public:
     
     // Get the execution engine
     llvm::Expected<llvm::orc::LLJIT&> getExecutionEngine();
+    
+    // Get the incremental parser
+    SwiftIncrementalParser* getIncrementalParser();
+    
+    // Get the incremental executor
+    SwiftIncrementalExecutor* getIncrementalExecutor();
+    
+    // Set up the print value call function (similar to Clang's RuntimeInterfaceBuilder)
+    void setAddPrintValueCall(TransformExprFunction* func) { AddPrintValueCall = func; }
+    
+    // Get the last value
+    const SwiftValue& getLastValue() const { return LastValue; }
+    
+    // Find and initialize the runtime interface builder
+    std::unique_ptr<SwiftRuntimeInterfaceBuilder> findRuntimeInterface();
+    
+    // Transform Swift code to capture values (similar to Clang's SynthesizeExpr)
+    std::string synthesizeExpr(const std::string& code);
 };
 
 /**
@@ -223,6 +334,35 @@ public:
     EvaluationResult evaluate(const std::string& expression);
     
     /**
+     * Parse Swift code into a PartialTranslationUnit
+     * @param code The Swift code to parse
+     * @return Expected containing a reference to the parsed PTU or an error
+     */
+    llvm::Expected<SwiftPartialTranslationUnit&> Parse(const std::string& code);
+    
+    /**
+     * Execute a PartialTranslationUnit
+     * @param ptu The PTU to execute
+     * @return Error if execution failed
+     */
+    llvm::Error Execute(SwiftPartialTranslationUnit& ptu);
+    
+    /**
+     * Parse and execute Swift code, returning the result value as SwiftValue
+     * @param code The Swift code to parse and execute
+     * @param resultValue Output parameter to store the result value
+     * @return Error if parsing or execution failed
+     */
+    llvm::Error ParseAndExecute(const std::string& code, SwiftValue* resultValue);
+    
+    /**
+     * Undo the last N user expressions (runtime code is not affected)
+     * @param N Number of expressions to undo
+     * @return Error if undo failed
+     */
+    llvm::Error Undo(unsigned N);
+    
+    /**
      * Evaluate multiple Swift expressions in sequence
      * @param expressions Vector of expressions to evaluate
      * @return Vector of results corresponding to each expression
@@ -247,6 +387,12 @@ public:
      * Get the last error message
      */
     std::string getLastError() const;
+    
+    /**
+     * Get the interpreter instance
+     * @return Pointer to the SwiftInterpreter instance
+     */
+    SwiftInterpreter* getInterpreter();
     
     /**
      * Check if Swift JIT support is available

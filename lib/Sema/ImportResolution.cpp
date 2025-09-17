@@ -269,16 +269,37 @@ private:
 //===----------------------------------------------------------------------===//
 
 void swift::performImportResolution(ModuleDecl *M) {
+  llvm::errs() << "[swift::performImportResolution] Starting import resolution for module: " << M->getName() << "\n";
+  
+  llvm::errs() << "[swift::performImportResolution] Processing " << M->getFiles().size() << " files\n";
   for (auto *file : M->getFiles()) {
     auto *SF = dyn_cast<SourceFile>(file);
-    if (!SF)
+    if (!SF) {
+      llvm::errs() << "[swift::performImportResolution] Skipping non-SourceFile\n";
       continue;
+    }
 
+    llvm::errs() << "[swift::performImportResolution] Processing SourceFile: " << SF->getFilename() << "\n";
     performImportResolution(*SF);
+    llvm::errs() << "[swift::performImportResolution] SourceFile processed: " << SF->getFilename() << "\n";
     assert(SF->ASTStage >= SourceFile::ImportsResolved &&
            "file has not had its imports resolved");
   }
+  llvm::errs() << "[swift::performImportResolution] Setting hasResolvedImports flag\n";
   M->setHasResolvedImports();
+  
+  // Check for errors after processing all files
+  llvm::errs() << "[swift::performImportResolution] Checking for errors after processing all files...\n";
+  bool astHadError = M->getASTContext().hadError();
+  bool diagsHadError = M->getASTContext().Diags.hadAnyError();
+  llvm::errs() << "[swift::performImportResolution] AST had error: " << astHadError << "\n";
+  llvm::errs() << "[swift::performImportResolution] Diagnostics had error: " << diagsHadError << "\n";
+  
+  if (diagsHadError) {
+    llvm::errs() << "[swift::performImportResolution] Diagnostics had errors, but cannot print individual messages\n";
+  }
+  
+  llvm::errs() << "[swift::performImportResolution] Import resolution completed for module: " << M->getName() << "\n";
 }
 
 /// performImportResolution - This walks the AST to resolve imports.
@@ -289,16 +310,22 @@ void swift::performImportResolution(ModuleDecl *M) {
 ///
 /// Import resolution operates on a parsed but otherwise unvalidated AST.
 void swift::performImportResolution(SourceFile &SF) {
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Starting import resolution for: " << SF.getFilename() << "\n";
+  
   // If we've already performed import resolution, bail.
-  if (SF.ASTStage == SourceFile::ImportsResolved)
+  if (SF.ASTStage == SourceFile::ImportsResolved) {
+    llvm::errs() << "[swift::performImportResolution(SourceFile)] Already resolved, returning\n";
     return;
+  }
 
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Creating FrontendStatsTracer\n";
   FrontendStatsTracer tracer(SF.getASTContext().Stats,
                              "Import resolution");
 
   // If we're silencing parsing warnings, then also silence import warnings.
   // This is necessary for secondary files as they can be parsed and have their
   // imports resolved multiple times.
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Setting up diagnostics\n";
   auto &diags = SF.getASTContext().Diags;
   auto didSuppressWarnings = diags.getSuppressWarnings();
   auto shouldSuppress = SF.getParsingOptions().contains(
@@ -306,19 +333,38 @@ void swift::performImportResolution(SourceFile &SF) {
   diags.setSuppressWarnings(didSuppressWarnings || shouldSuppress);
   SWIFT_DEFER { diags.setSuppressWarnings(didSuppressWarnings); };
 
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Creating ImportResolver\n";
   ImportResolver resolver(SF);
 
   // Resolve each import declaration.
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Starting to resolve import declarations\n";
   for (auto D : SF.getTopLevelDecls())
     resolver.visit(D);
+    
   for (auto D : SF.getHoistedDecls())
     resolver.visit(D);
 
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Setting imports and underlying module\n";
   SF.setImports(resolver.getFinishedImports());
   SF.setImportedUnderlyingModule(resolver.getUnderlyingClangModule());
 
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Setting AST stage to ImportsResolved\n";
   SF.ASTStage = SourceFile::ImportsResolved;
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Calling verify\n";
   verify(SF);
+  
+  // Check for errors after import resolution
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Checking for errors after import resolution...\n";
+  bool astHadError = SF.getASTContext().hadError();
+  bool diagsHadError = SF.getASTContext().Diags.hadAnyError();
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] AST had error: " << astHadError << "\n";
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Diagnostics had error: " << diagsHadError << "\n";
+  
+  if (diagsHadError) {
+    llvm::errs() << "[swift::performImportResolution(SourceFile)] Diagnostics had errors, but cannot print individual messages\n";
+  }
+  
+  llvm::errs() << "[swift::performImportResolution(SourceFile)] Import resolution completed for: " << SF.getFilename() << "\n";
 }
 
 void swift::performImportResolutionForClangMacroBuffer(
@@ -551,6 +597,9 @@ ModuleImplicitImportsRequest::evaluate(Evaluator &evaluator,
     break;
   case ImplicitStdlibKind::Stdlib:
     stdlib = ctx.getStdlibModule(/*loadIfAbsent*/ true);
+    if (!stdlib) {
+      printf("ERROR: Missing stdlib module! StdlibModuleName = '%s'\n", ctx.StdlibModuleName.str().str().c_str());
+    }
     assert(stdlib && "Missing stdlib?");
     break;
   }

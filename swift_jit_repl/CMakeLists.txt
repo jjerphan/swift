@@ -485,6 +485,51 @@ add_executable(swift_jit_server
     server_example.cpp
 )
 
+# Create parse and execute example executable
+add_executable(swift_jit_parse_and_execute_example
+    parse_and_execute_example.cpp
+)
+
+# Create parse execute example executable
+add_executable(swift_jit_parse_execute_example
+    parse_execute_example.cpp
+)
+
+# Create runtime interface test executable
+add_executable(swift_jit_runtime_test
+    test_runtime_interface.cpp
+)
+
+# Create proper value capture test executable
+add_executable(swift_jit_proper_value_test
+    test_proper_value_capture.cpp
+)
+
+# Create simple value capture test executable (no Swift runtime dependencies)
+add_executable(swift_jit_simple_value_test
+    test_simple_value_capture.cpp
+)
+
+# Create basic SwiftValue test executable
+add_executable(swift_jit_basic_swiftvalue_test
+    test_basic_swiftvalue.cpp
+)
+
+# Create code isolation test executable
+add_executable(swift_jit_code_isolation_test
+    test_code_isolation.cpp
+)
+
+# Create Swift to LLVM IR example
+add_executable(swift_jit_swift_to_llvm_example
+    swift_to_llvm_example.cpp
+)
+
+# Create full Swift to LLVM IR example
+add_executable(swift_jit_full_swift_to_llvm_example
+    full_swift_to_llvm_example.cpp
+)
+
 target_include_directories(swift_jit_server PRIVATE
     ${SWIFT_SOURCE_DIR}/include
     ${SWIFT_BUILD_LLVM}/include
@@ -517,12 +562,112 @@ target_link_libraries(swift_jit_server PRIVATE
     ${ADDITIONAL_LIBRARIES}
 )
 
+target_include_directories(swift_jit_parse_and_execute_example PRIVATE
+    ${SWIFT_SOURCE_DIR}/include
+    ${SWIFT_BUILD_LLVM}/include
+    ${SWIFT_BUILD_LLVM}/tools/clang/include
+    ${CLANG_SOURCE_DIR}/include
+    ${LLVM_SOURCE_DIR}/include
+    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+)
+
+target_compile_options(swift_jit_parse_and_execute_example PRIVATE ${LLVM_CXXFLAGS})
+target_compile_options(swift_jit_parse_and_execute_example PRIVATE -fexceptions)
+target_compile_definitions(swift_jit_parse_and_execute_example PRIVATE
+    SWIFT_TARGET_LIBRARY_NAME=swift
+    SWIFT_TARGET_LIBRARY_VERSION=1
+    __STDC_LIMIT_MACROS
+    __STDC_CONSTANT_MACROS
+)
+
+target_link_libraries(swift_jit_parse_and_execute_example PRIVATE
+    SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+)
+
+target_include_directories(swift_jit_parse_execute_example PRIVATE
+    ${SWIFT_SOURCE_DIR}/include
+    ${SWIFT_BUILD_LLVM}/include
+    ${SWIFT_BUILD_LLVM}/tools/clang/include
+    ${CLANG_SOURCE_DIR}/include
+    ${LLVM_SOURCE_DIR}/include
+    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+)
+
+target_compile_options(swift_jit_parse_execute_example PRIVATE ${LLVM_CXXFLAGS})
+target_compile_options(swift_jit_parse_execute_example PRIVATE -fexceptions)
+target_compile_definitions(swift_jit_parse_execute_example PRIVATE
+    SWIFT_TARGET_LIBRARY_NAME=swift
+    SWIFT_TARGET_LIBRARY_VERSION=1
+    __STDC_LIMIT_MACROS
+    __STDC_CONSTANT_MACROS
+)
+
+target_link_libraries(swift_jit_parse_execute_example PRIVATE
+    SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+)
+
+target_link_libraries(swift_jit_runtime_test PRIVATE
+    SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+)
+
+target_link_libraries(swift_jit_proper_value_test PRIVATE
+    SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+)
+
+target_link_libraries(swift_jit_simple_value_test PRIVATE
+    SwiftJITREPL
+)
+
+target_link_libraries(swift_jit_basic_swiftvalue_test PRIVATE
+    SwiftJITREPL
+)
+
+target_link_libraries(swift_jit_code_isolation_test PRIVATE
+    SwiftJITREPL
+)
+
+target_link_libraries(swift_jit_swift_to_llvm_example PRIVATE
+    SwiftJITREPL
+)
+
+target_link_libraries(swift_jit_full_swift_to_llvm_example PRIVATE
+    SwiftJITREPL
+)
+
 # Set output directories
 set_target_properties(SwiftJITREPL PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
-set_target_properties(swift_jit_example swift_jit_test swift_jit_server PROPERTIES
+set_target_properties(swift_jit_example swift_jit_test swift_jit_server swift_jit_parse_and_execute_example swift_jit_parse_execute_example swift_jit_runtime_test swift_jit_proper_value_test swift_jit_simple_value_test swift_jit_basic_swiftvalue_test swift_jit_code_isolation_test swift_jit_swift_to_llvm_example swift_jit_full_swift_to_llvm_example PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
@@ -532,7 +677,7 @@ install(TARGETS SwiftJITREPL
     ARCHIVE DESTINATION lib
 )
 
-install(TARGETS swift_jit_example swift_jit_test swift_jit_server
+install(TARGETS swift_jit_example swift_jit_test swift_jit_server swift_jit_parse_and_execute_example swift_jit_parse_execute_example swift_jit_runtime_test swift_jit_proper_value_test swift_jit_simple_value_test swift_jit_basic_swiftvalue_test swift_jit_code_isolation_test swift_jit_swift_to_llvm_example swift_jit_full_swift_to_llvm_example
     RUNTIME DESTINATION bin
 )
 

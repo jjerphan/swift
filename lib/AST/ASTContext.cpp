@@ -2863,7 +2863,8 @@ ModuleDecl *ASTContext::getModuleByName(StringRef ModuleName) {
 
 ModuleDecl *ASTContext::getModuleByIdentifier(Identifier ModuleID) {
   ImportPath::Module::Builder builder(ModuleID);
-  return getModule(builder.get());
+  auto result = getModule(builder.get());
+  return result;
 }
 
 llvm::ArrayRef<ModuleDecl *>
@@ -2884,8 +2885,10 @@ ASTContext::getModulesByRealOrABIName(StringRef ModuleName) {
 }
 
 ModuleDecl *ASTContext::getStdlibModule(bool loadIfAbsent) {
-  if (TheStdlibModule)
+  
+  if (TheStdlibModule) {
     return TheStdlibModule;
+  }
 
   if (loadIfAbsent) {
     auto mutableThis = const_cast<ASTContext*>(this);

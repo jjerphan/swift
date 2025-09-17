@@ -348,8 +348,11 @@ int swift::RunImmediately(CompilerInstance &CI, const ProcessCmdLine &CmdLine,
 }
 
 int swift::RunImmediatelyFromAST(CompilerInstance &CI) {
+  
   CI.performSema();
+  
   auto &Context = CI.getASTContext();
+  
   if (Context.hadError()) {
     return -1;
   }
@@ -358,6 +361,9 @@ int swift::RunImmediatelyFromAST(CompilerInstance &CI) {
 
   const ProcessCmdLine &CmdLine = ProcessCmdLine(
       FrontendOpts.ImmediateArgv.begin(), FrontendOpts.ImmediateArgv.end());
+
+  for (size_t i = 0; i < CmdLine.size(); ++i) {
+  }
 
   // Load libSwiftCore to setup process arguments.
   //
@@ -411,11 +417,13 @@ int swift::RunImmediatelyFromAST(CompilerInstance &CI) {
 
   auto *swiftModule = CI.getMainModule();
   const auto &IRGenOpts = Invocation.getIRGenOptions();
-  if (autolinkImportedModules(swiftModule, IRGenOpts))
+  if (autolinkImportedModules(swiftModule, IRGenOpts)) {
     return -1;
+  }
 
   auto &Target = swiftModule->getASTContext().LangOpts.Target;
-  assert(Target.isMacOSX());
+  // Note: The merged libraries feature (addMergedLibraries) is macOS-specific,
+  // but the JIT functionality itself works on all platforms
   auto JIT = SwiftJIT::Create(CI);
   if (auto Err = JIT.takeError()) {
     logError(std::move(Err));

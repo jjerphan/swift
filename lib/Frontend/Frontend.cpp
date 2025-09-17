@@ -564,6 +564,7 @@ bool CompilerInstance::setup(const CompilerInvocation &Invoke,
     Error = "Setting up virtual file system overlays failed";
     return true;
   }
+  
   setUpLLVMArguments();
   setUpDiagnosticOptions();
 
@@ -1567,6 +1568,7 @@ void CompilerInstance::loadAccessNotesIfNeeded() {
 }
 
 bool CompilerInstance::performParseAndResolveImportsOnly() {
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] Starting parse and resolve imports\n";
   FrontendStatsTracer tracer(getStatsReporter(), "parse-and-resolve-imports");
 
   // NOTE: Do not add new logic to this function, use the request evaluator to
@@ -1574,27 +1576,49 @@ bool CompilerInstance::performParseAndResolveImportsOnly() {
   // ought to be able to remove this function.
 
   // Load access notes.
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] Calling loadAccessNotesIfNeeded()\n";
   loadAccessNotesIfNeeded();
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] loadAccessNotesIfNeeded() completed\n";
 
   // Resolve imports for all the source files in the module.
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] Getting main module\n";
   auto *mainModule = getMainModule();
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] Calling performImportResolution()\n";
   performImportResolution(mainModule);
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] performImportResolution() completed\n";
 
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] Calling bindExtensions()\n";
   bindExtensions(*mainModule);
-  return Context->hadError();
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] bindExtensions() completed\n";
+  
+  bool hadError = Context->hadError();
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] Context had error: " << hadError << "\n";
+  llvm::errs() << "[CompilerInstance::performParseAndResolveImportsOnly] Parse and resolve imports completed\n";
+  return hadError;
 }
 
 void CompilerInstance::performSema() {
+  llvm::errs() << "[CompilerInstance::performSema] Starting semantic analysis\n";
+  
+  llvm::errs() << "[CompilerInstance::performSema] Calling performParseAndResolveImportsOnly()\n";
   performParseAndResolveImportsOnly();
+  llvm::errs() << "[CompilerInstance::performSema] performParseAndResolveImportsOnly() completed\n";
 
   FrontendStatsTracer tracer(getStatsReporter(), "perform-sema");
 
+  llvm::errs() << "[CompilerInstance::performSema] Starting forEachFileToTypeCheck loop\n";
   forEachFileToTypeCheck([&](SourceFile &SF) {
+    llvm::errs() << "[CompilerInstance::performSema] Processing file: " << SF.getFilename() << "\n";
     performTypeChecking(SF);
     return false;
   });
+  llvm::errs() << "[CompilerInstance::performSema] forEachFileToTypeCheck loop completed\n";
 
+  llvm::errs() << "[CompilerInstance::performSema] Calling finishTypeChecking()\n";
   finishTypeChecking();
+  llvm::errs() << "[CompilerInstance::performSema] finishTypeChecking() completed\n";
+  
+  llvm::errs() << "[CompilerInstance::performSema] Semantic analysis completed\n";
 }
 
 bool CompilerInstance::loadStdlibIfNeeded() {
@@ -1603,8 +1627,9 @@ bool CompilerInstance::loadStdlibIfNeeded() {
     return false;
   }
   // If we aren't expecting an implicit stdlib import, there's nothing to do.
-  if (getImplicitImportInfo().StdlibKind != ImplicitStdlibKind::Stdlib)
+  if (getImplicitImportInfo().StdlibKind != ImplicitStdlibKind::Stdlib) {
     return false;
+  }
 
   FrontendStatsTracer tracer(getStatsReporter(), "load-stdlib");
   ModuleDecl *M = Context->getStdlibModule(/*loadIfAbsent*/ true);
