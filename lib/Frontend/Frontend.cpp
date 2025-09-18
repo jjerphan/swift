@@ -1607,8 +1607,24 @@ void CompilerInstance::performSema() {
   FrontendStatsTracer tracer(getStatsReporter(), "perform-sema");
 
   llvm::errs() << "[CompilerInstance::performSema] Starting forEachFileToTypeCheck loop\n";
+  
+  // Log all source files in the main module before processing
+  if (auto* mainModule = getMainModule()) {
+    llvm::errs() << "[CompilerInstance::performSema] Main module: " << mainModule->getName() << "\n";
+    llvm::errs() << "[CompilerInstance::performSema] Main module source files:\n";
+    for (auto* file : mainModule->getFiles()) {
+      if (auto* sourceFile = dyn_cast<SourceFile>(file)) {
+        llvm::errs() << "  - SourceFile: " << sourceFile->getFilename() << " (buffer ID: " << sourceFile->getBufferID() << ")\n";
+      } else {
+        llvm::errs() << "  - FileUnit: " << static_cast<int>(file->getKind()) << "\n";
+      }
+    }
+  } else {
+    llvm::errs() << "[CompilerInstance::performSema] No main module found!\n";
+  }
+  
   forEachFileToTypeCheck([&](SourceFile &SF) {
-    llvm::errs() << "[CompilerInstance::performSema] Processing file: " << SF.getFilename() << "\n";
+    llvm::errs() << "[CompilerInstance::performSema] Processing file: " << SF.getFilename() << " (buffer ID: " << SF.getBufferID() << ")\n";
     performTypeChecking(SF);
     return false;
   });

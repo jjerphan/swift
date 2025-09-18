@@ -22,40 +22,7 @@ extern "C" void REPL_EXTERNAL_VISIBILITY __swift_Interpreter_SetValueNoAlloc(
 extern "C" void REPL_EXTERNAL_VISIBILITY __swift_Interpreter_SetValueWithAlloc(
     void *This, void *OutVal, void *OpaqueType);
 
-/**
- * Swift-specific value class (inspired by Clang's Value)
- * Represents the result of executing Swift code
- */
-class SwiftValue {
-private:
-    std::string Value;
-    std::string Type;
-    bool Valid = false;
-    
-public:
-    SwiftValue() = default;
-    SwiftValue(const std::string& val, const std::string& type) 
-        : Value(val), Type(type), Valid(true) {}
-    
-    bool isValid() const { return Valid; }
-    void clear() { Value.clear(); Type.clear(); Valid = false; }
-    
-    const std::string& getValue() const { return Value; }
-    const std::string& getType() const { return Type; }
-    
-    void setValue(const std::string& val, const std::string& type) {
-        Value = val;
-        Type = type;
-        Valid = true;
-    }
-    
-    void dump() const {
-        if (Valid) {
-            // Use printf to avoid iostream dependencies
-            printf("Value: %s (Type: %s)\n", Value.c_str(), Type.c_str());
-        }
-    }
-};
+// SwiftValue class removed - focusing on basic execution without value capture
 
 // Forward declarations for LLVM types
 namespace llvm {
@@ -100,13 +67,10 @@ namespace SwiftJITREPL {
  */
 struct EvaluationResult {
     bool success;
-    std::string value;          // String representation of the result value
-    std::string type;           // Type name of the result
     std::string error_message;  // Error message if evaluation failed
     
     // Constructor for successful evaluation
-    EvaluationResult(const std::string& val, const std::string& typ) 
-        : success(true), value(val), type(typ) {}
+    EvaluationResult() : success(true) {}
     
     // Constructor for failed evaluation
     explicit EvaluationResult(const std::string& error) 
@@ -227,8 +191,7 @@ private:
     size_t InitPTUSize = 0;
     
 public:
-    // Last captured value (similar to Clang's LastValue)
-    SwiftValue LastValue;
+    // LastValue removed - focusing on basic execution without value capture
     SwiftInterpreter(swift::CompilerInstance* CI);
     ~SwiftInterpreter();
     
@@ -241,8 +204,8 @@ public:
     // Undo the last N user PTUs (runtime PTUs are not affected)
     llvm::Error Undo(unsigned N);
     
-    // Parse and execute Swift code, returning the result value as SwiftValue
-    llvm::Error ParseAndExecute(llvm::StringRef Code, SwiftValue* V);
+    // Parse and execute Swift code
+    llvm::Error ParseAndExecute(llvm::StringRef Code);
     
     // Execute a partial translation unit
     llvm::Error Execute(SwiftPartialTranslationUnit& PTU);
@@ -266,7 +229,7 @@ public:
     void setAddPrintValueCall(TransformExprFunction* func) { AddPrintValueCall = func; }
     
     // Get the last value
-    const SwiftValue& getLastValue() const { return LastValue; }
+    // getLastValue removed - no value capture for now
     
     // Find and initialize the runtime interface builder
     std::unique_ptr<SwiftRuntimeInterfaceBuilder> findRuntimeInterface();
@@ -349,12 +312,11 @@ public:
     llvm::Error Execute(SwiftPartialTranslationUnit& ptu);
     
     /**
-     * Parse and execute Swift code, returning the result value as SwiftValue
+     * Parse and execute Swift code
      * @param code The Swift code to parse and execute
-     * @param resultValue Output parameter to store the result value
      * @return Error if parsing or execution failed
      */
-    llvm::Error ParseAndExecute(const std::string& code, SwiftValue* resultValue);
+    llvm::Error ParseAndExecute(const std::string& code);
     
     /**
      * Undo the last N user expressions (runtime code is not affected)
