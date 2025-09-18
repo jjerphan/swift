@@ -135,11 +135,12 @@ struct SwiftPartialTranslationUnit {
 class SwiftIncrementalParser {
 private:
     swift::CompilerInstance* CI;
+    llvm::orc::ThreadSafeContext* TSCtx;
     std::list<SwiftPartialTranslationUnit> PTUs;
     unsigned InputCount = 0;
     
 public:
-    SwiftIncrementalParser(swift::CompilerInstance* Instance);
+    SwiftIncrementalParser(swift::CompilerInstance* Instance, llvm::orc::ThreadSafeContext* TSCtx);
     ~SwiftIncrementalParser();
     
     // Parse incremental Swift input and return a partial translation unit

@@ -22,7 +22,9 @@ int main() {
     config.timeout_ms = 10000; // 10 seconds
     
     // Create and initialize REPL
+    std::cout << "Creating SwiftJITREPL instance...\n";
     SwiftJITREPL::SwiftJITREPL repl(config);
+    std::cout << "SwiftJITREPL instance created successfully\n";
     
     std::cout << "Initializing Swift JIT REPL...\n";
     if (!repl.initialize()) {
@@ -30,7 +32,8 @@ int main() {
         return 1;
     }
     
-    std::cout << "REPL initialized successfully!\n\n";
+    std::cout << "REPL initialized successfully!\n";
+    std::cout << "About to start expression evaluation...\n\n";
     
     // Test expressions
     std::vector<std::string> expressions = {

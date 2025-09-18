@@ -64,7 +64,8 @@ static bool isValidSwiftIdentifier(const std::string& identifier) {
  * This uses the same pipeline as Swift's immediate mode
  */
 static std::unique_ptr<llvm::Module> lowerSwiftToLLVMIR(swift::CompilerInstance* CI, 
-                                                        swift::ModuleDecl* module) {
+                                                        swift::ModuleDecl* module,
+                                                        llvm::LLVMContext* llvmCtx) {
     if (!CI || !module) {
         return nullptr;
     }
@@ -93,21 +94,26 @@ static std::unique_ptr<llvm::Module> lowerSwiftToLLVMIR(swift::CompilerInstance*
         // The full Swift pipeline requires proper SIL generation which is complex
         // and involves private constructors and request-based evaluation
         
-        auto LLVMCtx = std::make_unique<llvm::LLVMContext>();
-        auto LLVMMod = std::make_unique<llvm::Module>("swift_jit_module", *LLVMCtx);
+        // Use the shared LLVM context instead of creating a new one
+        auto LLVMMod = std::make_unique<llvm::Module>("swift_jit_module", *llvmCtx);
         
-        // Set basic module metadata
+        // Set basic module metadata to match JIT's data layout
         LLVMMod->setTargetTriple("x86_64-unknown-linux-gnu");
-        LLVMMod->setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
+        // Use the same data layout as the JIT to avoid compatibility issues
+        LLVMMod->setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128");
         
-        // Create a placeholder function
+        // Create a placeholder function with unique name
+        std::ostringstream funcName;
+        funcName << "swift_jit_function_" << std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+        
         llvm::FunctionType* funcType = llvm::FunctionType::get(
-            llvm::Type::getVoidTy(*LLVMCtx), false);
+            llvm::Type::getVoidTy(*llvmCtx), false);
         
         llvm::Function* func = llvm::Function::Create(
-            funcType, llvm::Function::ExternalLinkage, "swift_jit_function", *LLVMMod);
+            funcType, llvm::Function::ExternalLinkage, funcName.str(), *LLVMMod);
         
-        llvm::BasicBlock* block = llvm::BasicBlock::Create(*LLVMCtx, "entry", func);
+        llvm::BasicBlock* block = llvm::BasicBlock::Create(*llvmCtx, "entry", func);
         llvm::IRBuilder<> builder(block);
         builder.CreateRetVoid();
         
@@ -136,6 +142,23 @@ const char *const SwiftRuntimes = R"(
     // Global variables for the interpreter
     var interpreter: UnsafeMutableRawPointer = nil
     var lastValue: Any = ()
+    
+    // C-callable functions for value capture
+    @_cdecl("__swift_Interpreter_SetValueNoAlloc")
+    func __swift_Interpreter_SetValueNoAlloc(_ this: UnsafeMutableRawPointer, 
+                                           _ outVal: UnsafeMutableRawPointer, 
+                                           _ opaqueType: UnsafeRawPointer?, 
+                                           _ value: Any) {
+        // This will be implemented by the C++ side
+    }
+    
+    @_cdecl("__swift_Interpreter_SetValueWithAlloc")
+    func __swift_Interpreter_SetValueWithAlloc(_ this: UnsafeMutableRawPointer, 
+                                             _ outVal: UnsafeMutableRawPointer, 
+                                             _ opaqueType: UnsafeRawPointer?, 
+                                             _ value: Any) {
+        // This will be implemented by the C++ side
+    }
 )";
 
 extern "C" void REPL_EXTERNAL_VISIBILITY __swift_Interpreter_SetValueNoAlloc(
@@ -365,7 +388,10 @@ public:
     }
     
     EvaluationResult evaluate(const std::string& expression) {
+        llvm::errs() << "[SwiftJITREPL::evaluate] Starting evaluation of: " << expression << "\n";
+        
         if (!initialized) {
+            llvm::errs() << "[SwiftJITREPL::evaluate] ERROR: REPL not initialized\n";
             return EvaluationResult("REPL not initialized");
         }
         
@@ -374,13 +400,16 @@ public:
         try {
             // Use the interpreter to parse and execute the code
             if (!interpreter) {
+                llvm::errs() << "[SwiftJITREPL::evaluate] ERROR: Interpreter not initialized\n";
                 lastError = "Interpreter not initialized";
                 return EvaluationResult("Interpreter not initialized");
             }
             
+            llvm::errs() << "[SwiftJITREPL::evaluate] About to call ParseAndExecute...\n";
             // Use ParseAndExecute to handle the compilation and execution
             SwiftValue resultValue;
             auto error = interpreter->ParseAndExecute(expression, &resultValue);
+            llvm::errs() << "[SwiftJITREPL::evaluate] ParseAndExecute completed\n";
             if (error) {
                 lastError = "Failed to execute: " + llvm::toString(std::move(error));
                 stats.total_expressions++;
@@ -645,8 +674,8 @@ bool isSwiftJITAvailable() {
 // SwiftIncrementalParser Implementation
 // ============================================================================
 
-SwiftIncrementalParser::SwiftIncrementalParser(swift::CompilerInstance* Instance)
-    : CI(Instance) {
+SwiftIncrementalParser::SwiftIncrementalParser(swift::CompilerInstance* Instance, llvm::orc::ThreadSafeContext* TSCtx)
+    : CI(Instance), TSCtx(TSCtx) {
 }
 
 SwiftIncrementalParser::~SwiftIncrementalParser() {
@@ -676,60 +705,64 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     
     llvm::errs() << "[SwiftIncrementalParser] MemoryBuffer created with size: " << (inputSize + 1) << "\n";
     
-    // For incremental compilation, we need to create a fresh CompilerInstance
-    // to avoid the assertion error about ASTContext being created
-    // This is a limitation of Swift's current architecture
-    llvm::errs() << "[SwiftIncrementalParser] Creating fresh CompilerInstance\n";
-    auto freshCI = std::make_unique<swift::CompilerInstance>();
+    // Use the shared CompilerInstance to maintain access to runtime interface functions
+    // This allows incremental compilation where new code can reference previously defined functions
+    llvm::errs() << "[SwiftIncrementalParser] Using shared CompilerInstance for incremental parsing\n";
     auto invocation = CI->getInvocation();
     
     llvm::errs() << "[SwiftIncrementalParser] Got invocation from shared CI\n";
     
-    // Set up the fresh CompilerInstance to use the MemoryBuffer
+    // Set up the shared CompilerInstance to use the MemoryBuffer
     invocation.getFrontendOptions().InputsAndOutputs.clearInputs();
     invocation.getFrontendOptions().InputsAndOutputs.addInputFile(sourceName.str(), memoryBuffer.get());
     
     llvm::errs() << "[SwiftIncrementalParser] Added input file to invocation\n";
     
-    // Setup the fresh CompilerInstance
-    std::string setupError;
-    llvm::errs() << "[SwiftIncrementalParser] Setting up fresh CompilerInstance...\n";
-    llvm::errs() << "[SwiftIncrementalParser] About to call CompilerInstance::setup()\n";
-    int setupResult = freshCI->setup(invocation, setupError);
-    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance::setup() returned: " << setupResult << "\n";
-    if (setupResult) {
-        llvm::errs() << "[SwiftIncrementalParser] ERROR: Failed to setup compiler: " << setupError << "\n";
-        return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                       "Failed to setup compiler: " + setupError);
+    // Check if CompilerInstance is already set up
+    if (!CI->hasASTContext()) {
+        // Setup the shared CompilerInstance for incremental parsing
+        std::string setupError;
+        llvm::errs() << "[SwiftIncrementalParser] Setting up shared CompilerInstance for incremental parsing...\n";
+        llvm::errs() << "[SwiftIncrementalParser] About to call CompilerInstance::setup()\n";
+        int setupResult = CI->setup(invocation, setupError);
+        llvm::errs() << "[SwiftIncrementalParser] CompilerInstance::setup() returned: " << setupResult << "\n";
+        if (setupResult) {
+            llvm::errs() << "[SwiftIncrementalParser] ERROR: Failed to setup compiler: " << setupError << "\n";
+            return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                           "Failed to setup compiler: " + setupError);
+        }
+        llvm::errs() << "[SwiftIncrementalParser] CompilerInstance setup successful\n";
+    } else {
+        llvm::errs() << "[SwiftIncrementalParser] CompilerInstance already set up, reusing existing context\n";
+        // The CompilerInstance is already set up, we can reuse the existing context
+        // The runtime interface functions should be available in the existing context
     }
-    
-    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance setup successful\n";
     llvm::errs() << "[SwiftIncrementalParser] Checking AST context state after setup...\n";
-    llvm::errs() << "[SwiftIncrementalParser] AST context had error after setup: " << freshCI->getASTContext().hadError() << "\n";
-    llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error after setup: " << freshCI->getDiags().hadAnyError() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] AST context had error after setup: " << CI->getASTContext().hadError() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error after setup: " << CI->getDiags().hadAnyError() << "\n";
     
     // Perform semantic analysis
     llvm::errs() << "[SwiftIncrementalParser] Performing semantic analysis...\n";
     llvm::errs() << "[SwiftIncrementalParser] About to call performSema()\n";
-    freshCI->performSema();
+    CI->performSema();
     llvm::errs() << "[SwiftIncrementalParser] performSema() completed\n";
     
     llvm::errs() << "[SwiftIncrementalParser] Checking for errors after performSema...\n";
-    bool astHadError = freshCI->getASTContext().hadError();
-    bool diagsHadError = freshCI->getDiags().hadAnyError();
+    bool astHadError = CI->getASTContext().hadError();
+    bool diagsHadError = CI->getDiags().hadAnyError();
     llvm::errs() << "[SwiftIncrementalParser] AST had error: " << astHadError << "\n";
     llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << diagsHadError << "\n";
     
     if (astHadError || diagsHadError) {
         llvm::errs() << "[SwiftIncrementalParser] ERROR: Semantic analysis failed\n";
-        llvm::errs() << "[SwiftIncrementalParser] AST context had error: " << freshCI->getASTContext().hadError() << "\n";
-        llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << freshCI->getDiags().hadAnyError() << "\n";
+        llvm::errs() << "[SwiftIncrementalParser] AST context had error: " << CI->getASTContext().hadError() << "\n";
+        llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << CI->getDiags().hadAnyError() << "\n";
         
         // Print diagnostic messages
         llvm::errs() << "[SwiftIncrementalParser] Diagnostic messages:\n";
         
         // Try to get diagnostic information
-        auto& diags = freshCI->getDiags();
+        auto& diags = CI->getDiags();
         llvm::errs() << "  Diagnostics had any error: " << diags.hadAnyError() << "\n";
         
         // Note: Swift's DiagnosticEngine doesn't provide easy access to individual diagnostics
@@ -737,7 +770,7 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
         
         // Print AST information
         llvm::errs() << "[SwiftIncrementalParser] AST information:\n";
-        auto* module = freshCI->getMainModule();
+        auto* module = CI->getMainModule();
         if (module) {
             llvm::errs() << "  Module name: " << module->getName() << "\n";
             
@@ -764,12 +797,12 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
         }
         
         // Try to get source file information
-        auto& sourceMgr = freshCI->getSourceMgr();
+        auto& sourceMgr = CI->getSourceMgr();
         llvm::errs() << "[SwiftIncrementalParser] Source manager info:\n";
         llvm::errs() << "  Source manager available: true\n";
         
         // Print AST context information
-        auto& astCtx = freshCI->getASTContext();
+        auto& astCtx = CI->getASTContext();
         llvm::errs() << "[SwiftIncrementalParser] AST context info:\n";
         llvm::errs() << "  Had error: " << astCtx.hadError() << "\n";
         llvm::errs() << "  Lang options: " << astCtx.LangOpts.Target.getTriple() << "\n";
@@ -783,7 +816,7 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     
     // Get the main module
     llvm::errs() << "[SwiftIncrementalParser] Getting main module...\n";
-    auto *mainModule = freshCI->getMainModule();
+    auto *mainModule = CI->getMainModule();
     if (!mainModule) {
         llvm::errs() << "[SwiftIncrementalParser] ERROR: No main module found\n";
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -802,7 +835,9 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     llvm::errs() << "[SwiftIncrementalParser] PTU created, lowering Swift to LLVM IR...\n";
     
     // Lower Swift code to LLVM IR
-    auto llvmModule = lowerSwiftToLLVMIR(freshCI.get(), mainModule);
+    // Get the shared LLVM context from the ThreadSafeContext
+    auto llvmCtx = TSCtx->getContext();
+    auto llvmModule = lowerSwiftToLLVMIR(CI, mainModule, llvmCtx);
     if (llvmModule) {
         llvm::errs() << "[SwiftIncrementalParser] LLVM module generated successfully\n";
         ptu.TheModule = std::move(llvmModule);
@@ -874,6 +909,10 @@ llvm::Error SwiftIncrementalExecutor::addModule(SwiftPartialTranslationUnit& PTU
         llvm::errs() << "\n";
         
         // Move the module to the JIT, but release it from the PTU to avoid double-deletion
+        llvm::errs() << "[SwiftIncrementalExecutor] About to add module to JIT...\n";
+        llvm::errs() << "[SwiftIncrementalExecutor] Dumping LLVM IR content:\n";
+        PTU.TheModule->print(llvm::errs(), nullptr);
+        llvm::errs() << "[SwiftIncrementalExecutor] End of LLVM IR dump\n";
         auto result = Jit->addIRModule(RT, {std::move(PTU.TheModule), TSCtx});
         // Release the module from the PTU to prevent double-deletion
         PTU.TheModule.release();
@@ -882,6 +921,7 @@ llvm::Error SwiftIncrementalExecutor::addModule(SwiftPartialTranslationUnit& PTU
                         << llvm::toString(std::move(result)) << "\n";
         } else {
             llvm::errs() << "[SwiftIncrementalExecutor] Successfully added IR module to JIT\n";
+            llvm::errs() << "[SwiftIncrementalExecutor] JIT module addition completed\n";
         }
         return result;
     }
@@ -911,23 +951,32 @@ llvm::Error SwiftIncrementalExecutor::removeModule(SwiftPartialTranslationUnit& 
 }
 
 llvm::Error SwiftIncrementalExecutor::execute() {
+    llvm::errs() << "[SwiftIncrementalExecutor::execute] Starting execution\n";
+    
     if (!Jit) {
+        llvm::errs() << "[SwiftIncrementalExecutor::execute] ERROR: JIT not initialized\n";
         return llvm::createStringError(llvm::inconvertibleErrorCode(), 
                                      "JIT not initialized");
     }
     
     // Check if we have any modules to execute
     if (ResourceTrackers.empty()) {
+        llvm::errs() << "[SwiftIncrementalExecutor::execute] No modules to execute\n";
         return llvm::Error::success();
     }
     
+    llvm::errs() << "[SwiftIncrementalExecutor::execute] Found " << ResourceTrackers.size() << " modules to execute\n";
+    
     // Initialize the JIT dylib only once (equivalent to Clang's runCtors)
     if (!Initialized) {
+        llvm::errs() << "[SwiftIncrementalExecutor::execute] Initializing JIT dylib...\n";
         auto& MainJITDylib = Jit->getMainJITDylib();
         if (auto Err = Jit->initialize(MainJITDylib)) {
+            llvm::errs() << "[SwiftIncrementalExecutor::execute] ERROR: Failed to initialize JIT dylib\n";
             return Err;
         }
         Initialized = true;
+        llvm::errs() << "[SwiftIncrementalExecutor::execute] JIT dylib initialized successfully\n";
     }
     
     return llvm::Error::success();
@@ -975,7 +1024,7 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInstance* CI) {
     
     // Create incremental parser with the shared CompilerInstance
     // This allows incremental compilation where new code can reference previously defined variables
-    IncrParser = std::make_unique<SwiftIncrementalParser>(CI);
+    IncrParser = std::make_unique<SwiftIncrementalParser>(CI, TSCtx.get());
     
     // Create JIT builder
     auto jitBuilder = llvm::orc::LLJITBuilder();
@@ -1006,6 +1055,7 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInstance* CI) {
             return;
         }
         llvm::errs() << "[SwiftInterpreter] Runtime interface module added successfully\n";
+        llvm::errs() << "[SwiftInterpreter] Runtime interface setup completed\n";
     } else {
         llvm::errs() << "[SwiftInterpreter] ERROR: Failed to parse runtime interface: " 
                     << llvm::toString(runtimePTUOrError.takeError()) << "\n";
@@ -1052,31 +1102,44 @@ llvm::Error SwiftInterpreter::Undo(unsigned N) {
 }
 
 llvm::Error SwiftInterpreter::ParseAndExecute(llvm::StringRef Code, SwiftValue* V) {
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Starting execution of: " << Code << "\n";
+    
     // Clear LastValue before execution
     LastValue.clear();
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] LastValue cleared\n";
     
     // Transform the code to capture values using runtime interface
     std::string transformedCode = synthesizeExpr(Code.str());
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Transformed code: " << transformedCode << "\n";
     
     // Parse the transformed code
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to parse transformed code...\n";
     auto ptuOrError = IncrParser->Parse(transformedCode);
     if (!ptuOrError) {
+        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Parse failed\n";
         return ptuOrError.takeError();
     }
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse successful\n";
     
     auto& ptu = *ptuOrError;
     
     // Add to JIT
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to add module to JIT...\n";
     auto addError = IncrExecutor->addModule(ptu);
     if (addError) {
+        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Failed to add module to JIT\n";
         return addError;
     }
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Module added to JIT successfully\n";
     
     // Execute
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to execute JIT code...\n";
     auto execError = IncrExecutor->execute();
     if (execError) {
+        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Execution failed\n";
         return execError;
     }
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] JIT execution completed\n";
     
     // Check if LastValue was populated by the runtime interface functions
     if (LastValue.isValid()) {
