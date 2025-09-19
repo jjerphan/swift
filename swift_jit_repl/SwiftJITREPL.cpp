@@ -3,27 +3,22 @@
 // Swift runtime path macros (these should be defined by the build system)
 #ifndef SWIFT_RUNTIME_LIBRARY_PATHS
 #define SWIFT_RUNTIME_LIBRARY_PATHS "/usr/lib/swift/linux"
-#pragma message("WARNING: SWIFT_RUNTIME_LIBRARY_PATHS not defined by build system, using default: " SWIFT_RUNTIME_LIBRARY_PATHS)
 #endif
 
 #ifndef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1
 #define SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 "/usr/lib/swift/linux"
-#pragma message("WARNING: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 not defined by build system, using default: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1)
 #endif
 
 #ifndef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2
 #define SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 "/usr/lib/swift/linux/x86_64"
-#pragma message("WARNING: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 not defined by build system, using default: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2)
 #endif
 
 #ifndef SWIFT_RUNTIME_RESOURCE_PATH
 #define SWIFT_RUNTIME_RESOURCE_PATH "/usr/lib/swift"
-#pragma message("WARNING: SWIFT_RUNTIME_RESOURCE_PATH not defined by build system, using default: " SWIFT_RUNTIME_RESOURCE_PATH)
 #endif
 
 #ifndef SWIFT_SDK_PATH
 #define SWIFT_SDK_PATH "/usr/lib/swift/linux"
-#pragma message("WARNING: SWIFT_SDK_PATH not defined by build system, using default: " SWIFT_SDK_PATH)
 #endif
 
 // Compile-time validation to ensure all required macros are defined
@@ -78,26 +73,6 @@ static_assert(sizeof(SWIFT_SDK_PATH) > 1, "SWIFT_SDK_PATH must be defined");
 
 // Function to validate Swift runtime paths at compile time and runtime
 static void validateSwiftRuntimePaths() {
-    // Compile-time warnings for undefined macros
-    #ifdef SWIFT_RUNTIME_LIBRARY_PATHS
-        #pragma message("INFO: SWIFT_RUNTIME_LIBRARY_PATHS is defined as: " SWIFT_RUNTIME_LIBRARY_PATHS)
-    #endif
-    
-    #ifdef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1
-        #pragma message("INFO: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 is defined as: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1)
-    #endif
-    
-    #ifdef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2
-        #pragma message("INFO: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 is defined as: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2)
-    #endif
-    
-    #ifdef SWIFT_RUNTIME_RESOURCE_PATH
-        #pragma message("INFO: SWIFT_RUNTIME_RESOURCE_PATH is defined as: " SWIFT_RUNTIME_RESOURCE_PATH)
-    #endif
-    
-    #ifdef SWIFT_SDK_PATH
-        #pragma message("INFO: SWIFT_SDK_PATH is defined as: " SWIFT_SDK_PATH)
-    #endif
     
     // Runtime validation
     std::vector<std::string> pathsToCheck = {
@@ -738,14 +713,18 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     std::string moduleName = "Evaluation_" + std::to_string(modules->size());
     llvm::errs() << "[SwiftIncrementalParser] Creating new module: " << moduleName << "\n";
     
-    // Create implicit imports for state reuse
-    auto importInfo = createImplicitImports();
+    // Create module without imports initially (to debug the crash)
+    swift::ImplicitImportInfo importInfo;  // Empty imports for now
     
-    auto newModule = swift::ModuleDecl::create(
-        sharedASTContext->getIdentifier(moduleName),
+    llvm::errs() << "[SwiftIncrementalParser] About to call ModuleDecl::create...\n";
+    
+    auto newModule = swift::ModuleDecl::createMainModule(
         *sharedASTContext,
+        sharedASTContext->getIdentifier(moduleName),
         importInfo,
         [&](swift::ModuleDecl* module, auto addFile) {
+            llvm::errs() << "[SwiftIncrementalParser] Inside module creation lambda...\n";
+            
             // Create a MemoryBuffer for this expression
             std::ostringstream sourceName;
             sourceName << "swift_repl_input_" << InputCount++;
@@ -753,13 +732,49 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
             llvm::errs() << "[SwiftIncrementalParser] Source name: " << sourceName.str() << "\n";
             
             // Create a MemoryBuffer for the Swift code
+            llvm::errs() << "[SwiftIncrementalParser] Creating MemoryBuffer...\n";
+            llvm::errs() << "[SwiftIncrementalParser] Input content: '" << Input.str() << "'\n";
+            llvm::errs() << "[SwiftIncrementalParser] Input length: " << Input.size() << "\n";
             auto inputBuffer = llvm::MemoryBuffer::getMemBufferCopy(Input.str(), sourceName.str());
+            llvm::errs() << "[SwiftIncrementalParser] MemoryBuffer created successfully\n";
+            llvm::errs() << "[SwiftIncrementalParser] Buffer size: " << inputBuffer->getBufferSize() << "\n";
+            llvm::errs() << "[SwiftIncrementalParser] Buffer content: '" << inputBuffer->getBuffer() << "'\n";
             
             // Add the source buffer to the shared ASTContext's SourceManager
-            auto bufferID = sharedASTContext->SourceMgr.addNewSourceBuffer(std::move(inputBuffer));
-            llvm::errs() << "[SwiftIncrementalParser] Added source buffer with ID: " << bufferID << "\n";
+            llvm::errs() << "[SwiftIncrementalParser] Adding source buffer to SourceManager...\n";
+            
+            // Test that sharedASTContext is properly set before using it
+            if (!sharedASTContext) {
+                llvm::errs() << "[SwiftIncrementalParser] ERROR: sharedASTContext is null!\n";
+                return;
+            }
+            
+            // Test that the SourceManager is accessible
+            unsigned bufferID;
+            try {
+                llvm::errs() << "[SwiftIncrementalParser] Testing SourceManager access...\n";
+                auto& sourceMgr = sharedASTContext->SourceMgr;
+                llvm::errs() << "[SwiftIncrementalParser] SourceManager accessed successfully\n";
+                
+                // Test that we can get the number of source buffers before adding
+                llvm::errs() << "[SwiftIncrementalParser] Current source buffer count: " << sourceMgr.getLLVMSourceMgr().getNumBuffers() << "\n";
+                
+                bufferID = sourceMgr.addNewSourceBuffer(std::move(inputBuffer));
+                llvm::errs() << "[SwiftIncrementalParser] Added source buffer with ID: " << bufferID << "\n";
+                
+                // Verify the buffer was added successfully
+                llvm::errs() << "[SwiftIncrementalParser] New source buffer count: " << sourceMgr.getLLVMSourceMgr().getNumBuffers() << "\n";
+                
+            } catch (const std::exception& e) {
+                llvm::errs() << "[SwiftIncrementalParser] ERROR: Exception when accessing SourceManager: " << e.what() << "\n";
+                return;
+            } catch (...) {
+                llvm::errs() << "[SwiftIncrementalParser] ERROR: Unknown exception when accessing SourceManager\n";
+                return;
+            }
             
             // Add source file to the new module
+            llvm::errs() << "[SwiftIncrementalParser] Creating SourceFile...\n";
             addFile(new (*sharedASTContext) swift::SourceFile(
                 *module, 
                 swift::SourceFileKind::Library,  // Use Library to avoid "multiple main files" error
@@ -770,6 +785,8 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
             llvm::errs() << "[SwiftIncrementalParser] Created SourceFile for buffer " << bufferID << "\n";
         }
     );
+    
+    llvm::errs() << "[SwiftIncrementalParser] ModuleDecl::create completed successfully\n";
     
     // Register new module with shared ASTContext
     sharedASTContext->addLoadedModule(newModule);
@@ -1058,34 +1075,44 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();
     
+    // Note: Swift runtime loading is handled internally by the CompilerInstance
+    // when we call performSema() or other Swift compiler functions
+    
     // Create thread-safe context
     TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::make_unique<llvm::LLVMContext>());
     
     // Create shared ASTContext directly (bypass CompilerInstance)
     llvm::errs() << "[SwiftInterpreter] Creating shared ASTContext...\n";
     
-    // Create SourceManager and DiagnosticEngine
-    auto sourceMgr = std::make_unique<swift::SourceManager>();
-    auto diagEngine = std::make_unique<swift::DiagnosticEngine>(*sourceMgr);
+    // Create a CompilerInstance to properly initialize SourceManager
+    auto compilerInstance = std::make_unique<swift::CompilerInstance>();
     
-    sharedASTContext = std::unique_ptr<swift::ASTContext>(swift::ASTContext::get(
-        invocation->getLangOptions(),
-        invocation->getTypeCheckerOptions(),
-        invocation->getSILOptions(),
-        invocation->getSearchPathOptions(),
-        invocation->getClangImporterOptions(),
-        invocation->getSymbolGraphOptions(),
-        invocation->getCASOptions(),
-        invocation->getSerializationOptions(),
-        *sourceMgr,
-        *diagEngine
-    ));
+    // Setup the CompilerInstance with our invocation
+    std::string error;
+    if (compilerInstance->setup(*invocation, error)) {
+        llvm::errs() << "[SwiftInterpreter] ERROR: Failed to setup CompilerInstance: " << error << "\n";
+        return;
+    }
+    
+    // Get the SourceManager and DiagnosticEngine from the CompilerInstance
+    auto& sourceMgr = compilerInstance->getSourceMgr();
+    auto& diagEngine = compilerInstance->getDiags();
+    
+    // Use the ASTContext from the CompilerInstance (properly initialized)
+    // Note: We don't take ownership since CompilerInstance owns it
+    sharedASTContext = std::unique_ptr<swift::ASTContext, std::function<void(swift::ASTContext*)>>(
+        &compilerInstance->getASTContext(), 
+        [](swift::ASTContext*){} // No-op deleter
+    );
+    
+    // Store the CompilerInstance for later use
+    this->compilerInstance = std::move(compilerInstance);
     
     // Create initial empty module for base functionality
     llvm::errs() << "[SwiftInterpreter] Creating initial base module...\n";
-    auto baseModule = swift::ModuleDecl::create(
-        sharedASTContext->getIdentifier("SwiftJITREPL_Base"),
+    auto baseModule = swift::ModuleDecl::createMainModule(
         *sharedASTContext,
+        sharedASTContext->getIdentifier("SwiftJITREPL_Base"),
         swift::ImplicitImportInfo(),
         [](swift::ModuleDecl*, auto) {} // Empty initial module
     );

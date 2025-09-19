@@ -10,7 +10,11 @@
 
 // Visibility macro for runtime interface functions
 #ifdef _WIN32
+#ifdef SWIFT_JIT_REPL_EXPORTS
 #define REPL_EXTERNAL_VISIBILITY __declspec(dllexport)
+#else
+#define REPL_EXTERNAL_VISIBILITY __declspec(dllimport)
+#endif
 #else
 #define REPL_EXTERNAL_VISIBILITY __attribute__((visibility("default")))
 #endif
@@ -190,10 +194,11 @@ public:
 class SwiftInterpreter {
 private:
     std::unique_ptr<llvm::orc::ThreadSafeContext> TSCtx;
-    std::unique_ptr<swift::ASTContext> sharedASTContext;
+    std::unique_ptr<swift::ASTContext, std::function<void(swift::ASTContext*)>> sharedASTContext;
     std::vector<swift::ModuleDecl*> modules;  // Raw pointers (owned by ASTContext)
     std::unique_ptr<SwiftIncrementalParser> IncrParser;
     std::unique_ptr<SwiftIncrementalExecutor> IncrExecutor;
+    std::unique_ptr<swift::CompilerInstance> compilerInstance;  // For proper SourceManager initialization
     
     // Runtime interface builder for value capture
     std::unique_ptr<SwiftRuntimeInterfaceBuilder> RuntimeIB;

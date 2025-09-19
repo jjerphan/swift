@@ -393,6 +393,7 @@ target_compile_definitions(SwiftJITREPL PRIVATE
     SWIFT_TARGET_LIBRARY_VERSION=1
     __STDC_LIMIT_MACROS
     __STDC_CONSTANT_MACROS
+    SWIFT_JIT_REPL_EXPORTS
 )
 
 # Link libraries
