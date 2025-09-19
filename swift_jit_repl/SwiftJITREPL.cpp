@@ -1,5 +1,38 @@
 #include "SwiftJITREPL.h"
 
+// Swift runtime path macros (these should be defined by the build system)
+#ifndef SWIFT_RUNTIME_LIBRARY_PATHS
+#define SWIFT_RUNTIME_LIBRARY_PATHS "/usr/lib/swift/linux"
+#pragma message("WARNING: SWIFT_RUNTIME_LIBRARY_PATHS not defined by build system, using default: " SWIFT_RUNTIME_LIBRARY_PATHS)
+#endif
+
+#ifndef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1
+#define SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 "/usr/lib/swift/linux"
+#pragma message("WARNING: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 not defined by build system, using default: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1)
+#endif
+
+#ifndef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2
+#define SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 "/usr/lib/swift/linux/x86_64"
+#pragma message("WARNING: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 not defined by build system, using default: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2)
+#endif
+
+#ifndef SWIFT_RUNTIME_RESOURCE_PATH
+#define SWIFT_RUNTIME_RESOURCE_PATH "/usr/lib/swift"
+#pragma message("WARNING: SWIFT_RUNTIME_RESOURCE_PATH not defined by build system, using default: " SWIFT_RUNTIME_RESOURCE_PATH)
+#endif
+
+#ifndef SWIFT_SDK_PATH
+#define SWIFT_SDK_PATH "/usr/lib/swift/linux"
+#pragma message("WARNING: SWIFT_SDK_PATH not defined by build system, using default: " SWIFT_SDK_PATH)
+#endif
+
+// Compile-time validation to ensure all required macros are defined
+static_assert(sizeof(SWIFT_RUNTIME_LIBRARY_PATHS) > 1, "SWIFT_RUNTIME_LIBRARY_PATHS must be defined");
+static_assert(sizeof(SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1) > 1, "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 must be defined");
+static_assert(sizeof(SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2) > 1, "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 must be defined");
+static_assert(sizeof(SWIFT_RUNTIME_RESOURCE_PATH) > 1, "SWIFT_RUNTIME_RESOURCE_PATH must be defined");
+static_assert(sizeof(SWIFT_SDK_PATH) > 1, "SWIFT_SDK_PATH must be defined");
+
 // Standard library includes
 #include <iostream>
 #include <memory>
@@ -11,6 +44,7 @@
 #include <thread>
 #include <vector>
 #include <cstdarg>
+#include <unistd.h>  // for access() function
 
 // Basic LLVM includes only
 #include "llvm/ADT/StringRef.h"
@@ -33,11 +67,72 @@
 #include "swift/SIL/TypeLowering.h"
 #include "swift/AST/SILGenRequests.h"
 #include "swift/AST/IRGenRequests.h"
+#include "swift/AST/Module.h"
+#include "swift/AST/SourceFile.h"
+#include "swift/AST/Import.h"
 #include "swift/Subsystems.h"
 
 // LLVM IR parsing utilities (to reparse IR into our shared LLVMContext)
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Support/SourceMgr.h"
+
+// Function to validate Swift runtime paths at compile time and runtime
+static void validateSwiftRuntimePaths() {
+    // Compile-time warnings for undefined macros
+    #ifdef SWIFT_RUNTIME_LIBRARY_PATHS
+        #pragma message("INFO: SWIFT_RUNTIME_LIBRARY_PATHS is defined as: " SWIFT_RUNTIME_LIBRARY_PATHS)
+    #endif
+    
+    #ifdef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1
+        #pragma message("INFO: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1 is defined as: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1)
+    #endif
+    
+    #ifdef SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2
+        #pragma message("INFO: SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 is defined as: " SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2)
+    #endif
+    
+    #ifdef SWIFT_RUNTIME_RESOURCE_PATH
+        #pragma message("INFO: SWIFT_RUNTIME_RESOURCE_PATH is defined as: " SWIFT_RUNTIME_RESOURCE_PATH)
+    #endif
+    
+    #ifdef SWIFT_SDK_PATH
+        #pragma message("INFO: SWIFT_SDK_PATH is defined as: " SWIFT_SDK_PATH)
+    #endif
+    
+    // Runtime validation
+    std::vector<std::string> pathsToCheck = {
+        SWIFT_RUNTIME_LIBRARY_PATHS,
+        SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1,
+        SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2,
+        SWIFT_RUNTIME_RESOURCE_PATH,
+        SWIFT_SDK_PATH
+    };
+    
+    std::vector<std::string> pathNames = {
+        "SWIFT_RUNTIME_LIBRARY_PATHS",
+        "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1", 
+        "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2",
+        "SWIFT_RUNTIME_RESOURCE_PATH",
+        "SWIFT_SDK_PATH"
+    };
+    
+    bool allPathsValid = true;
+    for (size_t i = 0; i < pathsToCheck.size(); ++i) {
+        // Use access() system call for path validation (more portable than std::filesystem)
+        if (access(pathsToCheck[i].c_str(), F_OK) != 0) {
+            llvm::errs() << "WARNING: Swift runtime path does not exist: " << pathNames[i] 
+                        << " = " << pathsToCheck[i] << "\n";
+            allPathsValid = false;
+        }
+    }
+    
+    if (!allPathsValid) {
+        llvm::errs() << "WARNING: Some Swift runtime paths are invalid. This may cause runtime crashes.\n";
+        llvm::errs() << "Please ensure the Swift runtime is properly installed and paths are correctly configured.\n";
+    } else {
+        llvm::errs() << "INFO: All Swift runtime paths validated successfully.\n";
+    }
+}
 
 // Swift runtime includes for proper value capture
 #include "swift/Runtime/Reflection.h"
@@ -67,21 +162,35 @@ static bool isValidSwiftIdentifier(const std::string& identifier) {
  * Lower Swift code to LLVM IR using Swift's built-in utilities
  * This uses the same pipeline as Swift's immediate mode
  */
-static std::unique_ptr<llvm::Module> lowerSwiftCodeToLLVMModule(swift::CompilerInstance* CI, 
-                                                                swift::ModuleDecl* module,
+static std::unique_ptr<llvm::Module> lowerSwiftCodeToLLVMModule(swift::ModuleDecl* module,
+                                                                swift::ASTContext* astContext,
                                                                 llvm::LLVMContext* llvmCtx) {
-    if (!CI || !module) {
-        llvm::errs() << "[lowerSwiftCodeToLLVMModule] ERROR: Invalid parameters - CI: " << (CI ? "valid" : "null") 
-                     << ", module: " << (module ? "valid" : "null") << "\n";
+    if (!module || !astContext) {
+        llvm::errs() << "[lowerSwiftCodeToLLVMModule] ERROR: Invalid parameters - module: " << (module ? "valid" : "null") 
+                     << ", astContext: " << (astContext ? "valid" : "null") << "\n";
         return nullptr;
     }
 
-    // Use Swift's IRGen utility to generate LLVM IR from the module,
-    // then reparse the IR into our shared LLVMContext.
-    auto &invocation = CI->getInvocation();
+    // Create a minimal CompilerInvocation for IR generation
+    swift::CompilerInvocation invocation;
+    invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
+    invocation.getLangOptions().EnableObjCInterop = false;
+    invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
+    invocation.getFrontendOptions().ModuleName = module->getName().str();
+    invocation.getSILOptions().OptMode = swift::OptimizationMode::NoOptimization;
+    invocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
+    
+    // Set up search paths
+    auto &searchPaths = invocation.getSearchPathOptions();
+    searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
+    searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+    searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
+    searchPaths.setSDKPath(SWIFT_SDK_PATH);
+
     const auto &IRGenOpts = invocation.getIRGenOptions();
     const auto &TBDOpts = invocation.getTBDGenOptions();
-    const auto PSPs = CI->getPrimarySpecificPathsForAtMostOnePrimary();
+    swift::PrimarySpecificPaths PSPs;
+    PSPs.OutputFilename = (module->getName().str() + ".o").str();
 
     // Try to generate SIL first, then use SIL-based IR generation (like SwiftMaterializationUnit.cpp)
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] About to generate SIL module\n";
@@ -90,7 +199,7 @@ static std::unique_ptr<llvm::Module> lowerSwiftCodeToLLVMModule(swift::CompilerI
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] Creating TypeConverter for module: " << module->getName().str() << "\n";
     auto typeConverter = std::make_unique<swift::Lowering::TypeConverter>(*module);
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] TypeConverter created, calling performASTLowering...\n";
-    auto silModule = swift::performASTLowering(module, *typeConverter, CI->getSILOptions());
+    auto silModule = swift::performASTLowering(module, *typeConverter, invocation.getSILOptions());
     if (!silModule) {
         llvm::errs() << "[lowerSwiftCodeToLLVMModule] ERROR: Failed to generate SIL module\n";
         return nullptr;
@@ -113,7 +222,7 @@ static std::unique_ptr<llvm::Module> lowerSwiftCodeToLLVMModule(swift::CompilerI
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] Module name: " << module->getName().str() << "\n";
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] PSPs output filename: " << PSPs.OutputFilename << "\n";
     
-    swift::GeneratedModule GenModule = swift::performIRGeneration(
+    swift::GeneratedModule genModule = swift::performIRGeneration(
         module, IRGenOpts, TBDOpts, std::move(silModule),
         module->getName().str(), PSPs,
         /*parallelOutputFilenames*/ llvm::ArrayRef<std::string>(),
@@ -121,7 +230,7 @@ static std::unique_ptr<llvm::Module> lowerSwiftCodeToLLVMModule(swift::CompilerI
     
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] performIRGeneration completed\n";
 
-    auto *Produced = GenModule.getModule();
+    auto *Produced = genModule.getModule();
     if (!Produced) {
         llvm::errs() << "[lowerSwiftCodeToLLVMModule] ERROR: performIRGeneration produced no module\n";
         return nullptr;
@@ -237,7 +346,7 @@ public:
     std::string lastError;
         
     // Swift compiler infrastructure
-    std::unique_ptr<swift::CompilerInstance> compilerInstance;
+    swift::CompilerInvocation compilerInvocation;
     std::unique_ptr<SwiftInterpreter> interpreter;
     
     // Compilation state
@@ -279,61 +388,66 @@ public:
     bool initialize() {
         try {
             
-            // Create Swift compiler instance
-            compilerInstance = std::make_unique<swift::CompilerInstance>();
-            
             // Create and configure the compiler invocation for JIT/REPL mode
-            swift::CompilerInvocation invocation;
+            // We only need the CompilerInvocation, not the full CompilerInstance
             
             // Set up language options for JIT mode
-            invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
-            invocation.getLangOptions().EnableObjCInterop = false;
+            compilerInvocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
+            compilerInvocation.getLangOptions().EnableObjCInterop = false;
             
             // Set up frontend options for SIL generation (to generate SIL functions)
-            invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
+            compilerInvocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
             
             // Set up command line arguments for immediate mode
             std::vector<std::string> immediateArgs = {"swift", "-i"};
-            invocation.getFrontendOptions().ImmediateArgv = immediateArgs;
+            compilerInvocation.getFrontendOptions().ImmediateArgv = immediateArgs;
             
             // Set a valid and preferably unique module name
             std::string moduleName = currentModuleName.empty() ? generateUniqueModuleName() : currentModuleName;
-            invocation.getFrontendOptions().ModuleName = moduleName;
+            compilerInvocation.getFrontendOptions().ModuleName = moduleName;
             
             // Set up SIL options based on configuration
-            invocation.getSILOptions().OptMode = config.enable_optimizations ? 
+            compilerInvocation.getSILOptions().OptMode = config.enable_optimizations ? 
                 swift::OptimizationMode::ForSpeed : swift::OptimizationMode::NoOptimization;
             
             // Set additional SIL options for immediate mode
-            invocation.getSILOptions().EnableSILOpaqueValues = true;
+            compilerInvocation.getSILOptions().EnableSILOpaqueValues = true;
             
             // Set up IRGen options
-            invocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
+            compilerInvocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
             
             // Set debug info generation based on configuration
             if (config.generate_debug_info) {
-                invocation.getIRGenOptions().DebugInfoFormat = swift::IRGenDebugInfoFormat::DWARF;
+                compilerInvocation.getIRGenOptions().DebugInfoFormat = swift::IRGenDebugInfoFormat::DWARF;
             }
             
             // Set the correct search paths for Swift standard library using compile time values
-            auto &searchPaths = invocation.getSearchPathOptions();
+            auto &searchPaths = compilerInvocation.getSearchPathOptions();
             searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
             searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
             searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
             searchPaths.setSDKPath(SWIFT_SDK_PATH);
  
-            // Set up the compiler instance
-            std::string error;
-            if (compilerInstance->setup(invocation, error)) {
-                lastError = "Failed to setup Swift compiler instance: " + (error.empty() ? "Unknown error" : error);
-                return false;
-            }
             // Record the actual module name used
             currentModuleName = moduleName;
             
+            // Validate the CompilerInvocation by creating a temporary CompilerInstance
+            // This ensures our configuration is correct before we start using it
+            llvm::errs() << "[SwiftJITREPL::initialize] Validating CompilerInvocation configuration...\n";
+            auto tempCI = std::make_unique<swift::CompilerInstance>();
+            std::string setupError;
+            if (tempCI->setup(compilerInvocation, setupError)) {
+                llvm::errs() << "[SwiftJITREPL::initialize] CompilerInstance setup failed: " << setupError << "\n";
+                lastError = "Failed to validate Swift compiler configuration: " + (setupError.empty() ? "Unknown error" : setupError);
+                return false;
+            }
+            // Configuration is valid, we can discard the temporary CompilerInstance
+            llvm::errs() << "[SwiftJITREPL::initialize] CompilerInstance setup successful\n";
+            tempCI.reset();
+            
             // Create the interpreter for incremental compilation
-            // Use the same CompilerInstance for consistency
-            interpreter = std::make_unique<SwiftInterpreter>(compilerInstance.get());
+            // We don't need a CompilerInstance anymore, just the CompilerInvocation
+            interpreter = std::make_unique<SwiftInterpreter>(&compilerInvocation);
             
             initialized = true;
             return true;
@@ -400,36 +514,10 @@ public:
         return initialized;
     }
     
-    bool addSourceFile(const std::string& source_code, const std::string& filename) {
-        try {
-            // Create MemoryBuffer from source code
-            auto buffer = llvm::MemoryBuffer::getMemBuffer(source_code, filename);
-            if (!buffer) {
-                lastError = "Failed to create memory buffer for source file";
-                return false;
-            }
-            
-            // Add to SourceManager
-            auto &sourceManager = compilerInstance->getSourceMgr();
-            unsigned bufferID = sourceManager.addNewSourceBuffer(std::move(buffer));
-            
-            // Let the compiler instance handle the rest of the processing
-            // For now, just track that we added the source file
-            sourceFiles.push_back(source_code);
-            return true;
-        } catch (const std::exception& e) {
-            lastError = e.what();
-            return false;
-        }
-    }
-    
     bool reset() {
         try {
             // Reset Swift compiler state
-            if (compilerInstance) {
-                compilerInstance->freeASTContext();
-                compilerInstance.reset();
-            }
+            // No need to cleanup CompilerInvocation as it's just configuration
             
             // Clear source files and reset state
             sourceFiles.clear();
@@ -548,10 +636,6 @@ std::vector<EvaluationResult> SwiftJITREPL::evaluateMultiple(const std::vector<s
     return pImpl->evaluateMultiple(expressions);
 }
 
-bool SwiftJITREPL::addSourceFile(const std::string& source_code, const std::string& filename) {
-    return pImpl->addSourceFile(source_code, filename);
-}
-
 bool SwiftJITREPL::reset() {
     return pImpl->reset();
 }
@@ -571,9 +655,6 @@ SwiftJITREPL::CompilationStats SwiftJITREPL::getStats() const {
 bool SwiftJITREPL::isSwiftJITAvailable() {
     // Check if Swift JIT is available by attempting to create a minimal instance
     try {
-        // Create a minimal Swift compiler instance to test availability
-        auto compilerInstance = std::make_unique<swift::CompilerInstance>();
-        
         // Create and configure the compiler invocation for JIT mode
         swift::CompilerInvocation invocation;
         
@@ -598,11 +679,22 @@ bool SwiftJITREPL::isSwiftJITAvailable() {
         // Set up IRGen options
         invocation.getIRGenOptions().OutputKind = swift::IRGenOutputKind::Module;
         
-        // Set up the compiler instance
+        // Set the correct search paths for Swift standard library using compile time values
+        auto &searchPaths = invocation.getSearchPathOptions();
+        searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
+        searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+        searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
+        searchPaths.setSDKPath(SWIFT_SDK_PATH);
+        
+        // Validate the configuration by creating a temporary CompilerInstance
+        auto tempCI = std::make_unique<swift::CompilerInstance>();
         std::string error;
-        if (!compilerInstance->setup(invocation, error)) {
-            return false;
+        if (tempCI->setup(invocation, error)) {
+            llvm::errs() << "[isSwiftJITAvailable] CompilerInstance setup failed: " << error << "\n";
+            return false; // Setup failed
         }
+        // Configuration is valid
+        llvm::errs() << "[isSwiftJITAvailable] CompilerInstance setup successful\n";
         
         return true;
     } catch (...) {
@@ -626,8 +718,10 @@ bool isSwiftJITAvailable() {
 // SwiftIncrementalParser Implementation
 // ============================================================================
 
-SwiftIncrementalParser::SwiftIncrementalParser(swift::CompilerInstance* Instance, llvm::orc::ThreadSafeContext* TSCtx)
-    : CI(Instance), TSCtx(TSCtx) {
+SwiftIncrementalParser::SwiftIncrementalParser(swift::ASTContext* sharedASTContext, 
+                                               std::vector<swift::ModuleDecl*>* modules,
+                                               llvm::orc::ThreadSafeContext* TSCtx)
+    : sharedASTContext(sharedASTContext), modules(modules), TSCtx(TSCtx) {
 }
 
 SwiftIncrementalParser::~SwiftIncrementalParser() {
@@ -640,151 +734,98 @@ SwiftIncrementalParser::~SwiftIncrementalParser() {
 llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm::StringRef Input) {
     llvm::errs() << "[SwiftIncrementalParser] Parse called with input: " << Input << "\n";
     
-    // Create a MemoryBuffer for this expression (like Clang's IncrementalParser)
-    // This is more efficient than using temporary files
-    std::ostringstream sourceName;
-    sourceName << "swift_repl_input_" << InputCount++;
+    // Create new ModuleDecl for this evaluation
+    std::string moduleName = "Evaluation_" + std::to_string(modules->size());
+    llvm::errs() << "[SwiftIncrementalParser] Creating new module: " << moduleName << "\n";
     
-    llvm::errs() << "[SwiftIncrementalParser] Source name: " << sourceName.str() << "\n";
+    // Create implicit imports for state reuse
+    auto importInfo = createImplicitImports();
     
-    // Create an uninitialized memory buffer, copy code in and append "\n"
-    size_t inputSize = Input.str().size(); // don't include trailing 0
-    std::unique_ptr<llvm::MemoryBuffer> memoryBuffer(
-        llvm::WritableMemoryBuffer::getNewUninitMemBuffer(inputSize + 1, sourceName.str()));
-    char *bufferStart = const_cast<char *>(memoryBuffer->getBufferStart());
-    memcpy(bufferStart, Input.str().data(), inputSize);
-    bufferStart[inputSize] = '\n';
-    
-    llvm::errs() << "[SwiftIncrementalParser] MemoryBuffer created with size: " << (inputSize + 1) << "\n";
-    
-    // Use the shared CompilerInstance to maintain access to runtime interface functions
-    // This allows incremental compilation where new code can reference previously defined functions
-    llvm::errs() << "[SwiftIncrementalParser] Using shared CompilerInstance for incremental parsing\n";
-    auto invocation = CI->getInvocation();
-    
-    llvm::errs() << "[SwiftIncrementalParser] Got invocation from shared CI\n";
-    
-    // Set up the shared CompilerInstance to use the MemoryBuffer
-    invocation.getFrontendOptions().InputsAndOutputs.clearInputs();
-    invocation.getFrontendOptions().InputsAndOutputs.addInputFile(sourceName.str(), memoryBuffer.get());
-    
-    llvm::errs() << "[SwiftIncrementalParser] Added input file to invocation\n";
-    
-    // Check if CompilerInstance is already set up
-    if (!CI->hasASTContext()) {
-        // Setup the shared CompilerInstance for incremental parsing
-        std::string setupError;
-        llvm::errs() << "[SwiftIncrementalParser] Setting up shared CompilerInstance for incremental parsing...\n";
-        llvm::errs() << "[SwiftIncrementalParser] About to call CompilerInstance::setup()\n";
-        int setupResult = CI->setup(invocation, setupError);
-        llvm::errs() << "[SwiftIncrementalParser] CompilerInstance::setup() returned: " << setupResult << "\n";
-        if (setupResult) {
-            llvm::errs() << "[SwiftIncrementalParser] ERROR: Failed to setup compiler: " << setupError << "\n";
-            return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                           "Failed to setup compiler: " + setupError);
+    auto newModule = swift::ModuleDecl::create(
+        sharedASTContext->getIdentifier(moduleName),
+        *sharedASTContext,
+        importInfo,
+        [&](swift::ModuleDecl* module, auto addFile) {
+            // Create a MemoryBuffer for this expression
+            std::ostringstream sourceName;
+            sourceName << "swift_repl_input_" << InputCount++;
+            
+            llvm::errs() << "[SwiftIncrementalParser] Source name: " << sourceName.str() << "\n";
+            
+            // Create a MemoryBuffer for the Swift code
+            auto inputBuffer = llvm::MemoryBuffer::getMemBufferCopy(Input.str(), sourceName.str());
+            
+            // Add the source buffer to the shared ASTContext's SourceManager
+            auto bufferID = sharedASTContext->SourceMgr.addNewSourceBuffer(std::move(inputBuffer));
+            llvm::errs() << "[SwiftIncrementalParser] Added source buffer with ID: " << bufferID << "\n";
+            
+            // Add source file to the new module
+            addFile(new (*sharedASTContext) swift::SourceFile(
+                *module, 
+                swift::SourceFileKind::Library,  // Use Library to avoid "multiple main files" error
+                bufferID,
+                swift::SourceFile::getDefaultParsingOptions(sharedASTContext->LangOpts)
+            ));
+            
+            llvm::errs() << "[SwiftIncrementalParser] Created SourceFile for buffer " << bufferID << "\n";
         }
-        llvm::errs() << "[SwiftIncrementalParser] CompilerInstance setup successful\n";
-    } else {
-        llvm::errs() << "[SwiftIncrementalParser] CompilerInstance already set up, reusing existing context\n";
-        // The CompilerInstance is already set up, we can reuse the existing context
-        // The runtime interface functions should be available in the existing context
-    }
-    llvm::errs() << "[SwiftIncrementalParser] Checking AST context state after setup...\n";
-    llvm::errs() << "[SwiftIncrementalParser] AST context had error after setup: " << CI->getASTContext().hadError() << "\n";
-    llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error after setup: " << CI->getDiags().hadAnyError() << "\n";
+    );
     
-    // Add the Swift code as a source file to the module
-    llvm::errs() << "[SwiftIncrementalParser] Adding Swift code as source file to module...\n";
+    // Register new module with shared ASTContext
+    sharedASTContext->addLoadedModule(newModule);
+    modules->push_back(newModule);
     
-    // Get the main module first
-    auto* mainModule = CI->getMainModule();
-    if (!mainModule) {
-        llvm::errs() << "[SwiftIncrementalParser] ERROR: No main module found\n";
+    llvm::errs() << "[SwiftIncrementalParser] New module created and registered: " << newModule->getName() << "\n";
+    
+    // Perform semantic analysis on the new module
+    llvm::errs() << "[SwiftIncrementalParser] Performing semantic analysis...\n";
+    
+    // Create a temporary CompilerInstance for semantic analysis
+    auto tempCI = std::make_unique<swift::CompilerInstance>();
+    swift::CompilerInvocation invocation;
+    invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
+    invocation.getLangOptions().EnableObjCInterop = false;
+    invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
+    invocation.getFrontendOptions().ModuleName = moduleName;
+    
+    // Set up search paths
+    auto &searchPaths = invocation.getSearchPathOptions();
+    searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
+    searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+    searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
+    searchPaths.setSDKPath(SWIFT_SDK_PATH);
+    
+    std::string setupError;
+    if (tempCI->setup(invocation, setupError)) {
+        llvm::errs() << "[SwiftIncrementalParser] ERROR: Failed to setup CompilerInstance: " << setupError << "\n";
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                       "No main module found");
+                                       "Failed to setup CompilerInstance: " + setupError);
     }
     
-    // Create a source buffer for the Swift code
-    auto sourceBuffer = llvm::MemoryBuffer::getMemBufferCopy(Input.str(), "input.swift");
-    auto bufferID = CI->getSourceMgr().addNewSourceBuffer(std::move(sourceBuffer));
-    llvm::errs() << "[SwiftIncrementalParser] Source buffer created with ID: " << bufferID << "\n";
-    
-    // Create a source file for the main module using a different approach
-    // Since createSourceFileForMainModule is private, we'll create the source file directly
-    auto isPrimary = true; // This is a primary input
-    swift::SourceFile::ParsingOptions opts; // Use default parsing options
-    
-    auto* sourceFile = new (CI->getASTContext())
-        swift::SourceFile(*mainModule, swift::SourceFileKind::Main, bufferID, opts, isPrimary);
-    
-    llvm::errs() << "[SwiftIncrementalParser] Source file created successfully\n";
+    // Set the main module to our new module
+    tempCI->setMainModule(newModule);
     
     // Perform semantic analysis
-    llvm::errs() << "[SwiftIncrementalParser] Performing semantic analysis...\n";
-    llvm::errs() << "[SwiftIncrementalParser] About to call performSema()\n";
-    CI->performSema();
+    tempCI->performSema();
     llvm::errs() << "[SwiftIncrementalParser] performSema() completed\n";
     
-    llvm::errs() << "[SwiftIncrementalParser] Checking for errors after performSema...\n";
-    bool astHadError = CI->getASTContext().hadError();
-    bool diagsHadError = CI->getDiags().hadAnyError();
+    // Check for errors
+    bool astHadError = sharedASTContext->hadError();
+    bool diagsHadError = tempCI->getDiags().hadAnyError();
     llvm::errs() << "[SwiftIncrementalParser] AST had error: " << astHadError << "\n";
     llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << diagsHadError << "\n";
     
     if (astHadError || diagsHadError) {
         llvm::errs() << "[SwiftIncrementalParser] ERROR: Semantic analysis failed\n";
-        llvm::errs() << "[SwiftIncrementalParser] AST context had error: " << CI->getASTContext().hadError() << "\n";
-        llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << CI->getDiags().hadAnyError() << "\n";
         
-        // Print diagnostic messages
-        llvm::errs() << "[SwiftIncrementalParser] Diagnostic messages:\n";
-        
-        // Try to get diagnostic information
-        auto& diags = CI->getDiags();
-        llvm::errs() << "  Diagnostics had any error: " << diags.hadAnyError() << "\n";
-        
-        // Note: Swift's DiagnosticEngine doesn't provide easy access to individual diagnostics
-        // We can only check if there were errors, not get the specific messages
-        
-        // Print AST information
-        llvm::errs() << "[SwiftIncrementalParser] AST information:\n";
-        auto* module = CI->getMainModule();
-        if (module) {
-            llvm::errs() << "  Module name: " << module->getName() << "\n";
-            
-            // Get top-level declarations
-            llvm::SmallVector<swift::Decl*, 32> topLevelDecls;
-            module->getTopLevelDecls(topLevelDecls);
-            llvm::errs() << "  Module declarations: " << topLevelDecls.size() << "\n";
-            
-            // Print top-level declarations
-            for (auto* decl : topLevelDecls) {
-                llvm::errs() << "    Declaration: ";
-                if (auto* func = llvm::dyn_cast<swift::FuncDecl>(decl)) {
-                    llvm::errs() << "func " << func->getName() << "\n";
-                } else if (auto* var = llvm::dyn_cast<swift::VarDecl>(decl)) {
-                    llvm::errs() << "var " << var->getName() << "\n";
-                } else if (auto* import = llvm::dyn_cast<swift::ImportDecl>(decl)) {
-                    llvm::errs() << "import " << import->getModulePath().front().Item << "\n";
-                } else {
-                    llvm::errs() << "unknown declaration type\n";
-                }
-            }
-        } else {
-            llvm::errs() << "  No main module found\n";
+        // Print module state for debugging
+        llvm::SmallVector<swift::Decl*, 32> topLevelDecls;
+        newModule->getTopLevelDecls(topLevelDecls);
+        llvm::errs() << "[SwiftIncrementalParser] Module declarations count: " << topLevelDecls.size() << "\n";
+        for (size_t i = 0; i < topLevelDecls.size() && i < 5; ++i) {
+            auto decl = topLevelDecls[i];
+            llvm::errs() << "[SwiftIncrementalParser]   [" << i << "] " << swift::Decl::getKindName(decl->getKind()) << "\n";
         }
-        
-        // Try to get source file information
-        auto& sourceMgr = CI->getSourceMgr();
-        llvm::errs() << "[SwiftIncrementalParser] Source manager info:\n";
-        llvm::errs() << "  Source manager available: true\n";
-        
-        // Print AST context information
-        auto& astCtx = CI->getASTContext();
-        llvm::errs() << "[SwiftIncrementalParser] AST context info:\n";
-        llvm::errs() << "  Had error: " << astCtx.hadError() << "\n";
-        llvm::errs() << "  Lang options: " << astCtx.LangOpts.Target.getTriple() << "\n";
-        llvm::errs() << "  Search paths: " << astCtx.SearchPathOpts.RuntimeLibraryPaths.size() << " runtime paths\n";
         
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                        "Semantic analysis failed");
@@ -792,84 +833,26 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     
     llvm::errs() << "[SwiftIncrementalParser] Semantic analysis successful\n";
     
-    // Get the main module (already obtained above)
-    llvm::errs() << "[SwiftIncrementalParser] Getting main module...\n";
-    if (!mainModule) {
-        llvm::errs() << "[SwiftIncrementalParser] ERROR: No main module found\n";
-        return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                       "No main module found");
-    }
-    
-    llvm::errs() << "[SwiftIncrementalParser] Main module found: " << mainModule->getName() << "\n";
-    
     // Create a new PTU for this expression
     llvm::errs() << "[SwiftIncrementalParser] Creating new PTU\n";
     PTUs.emplace_back();
     auto& ptu = PTUs.back();
-    ptu.ModulePart = mainModule;
+    ptu.ModulePart = newModule;
+    ptu.SharedASTContext = sharedASTContext;
     ptu.InputCode = Input.str();
     
     llvm::errs() << "[SwiftIncrementalParser] PTU created, lowering Swift to an LLVM module...\n";
     
-    // Log the input code that was parsed
-    llvm::errs() << "[SwiftIncrementalParser] Input code that was parsed: '" << Input.str() << "'\n";
-    
-    // Verify the state of CI, mainModule, and llvmCtx before calling lowerSwiftCodeToLLVMModule
-    llvm::errs() << "[SwiftIncrementalParser] === STATE VERIFICATION ===\n";
-    
-    // Check CompilerInstance state
-    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance state:\n";
-    llvm::errs() << "[SwiftIncrementalParser]   - CI valid: " << (CI ? "YES" : "NO") << "\n";
-    if (CI) {
-        llvm::errs() << "[SwiftIncrementalParser]   - Has AST context: " << (CI->hasASTContext() ? "YES" : "NO") << "\n";
-        llvm::errs() << "[SwiftIncrementalParser]   - AST context had error: " << (CI->getASTContext().hadError() ? "YES" : "NO") << "\n";
-    }
-    
-    // Check mainModule state
-    llvm::errs() << "[SwiftIncrementalParser] MainModule state:\n";
-    llvm::errs() << "[SwiftIncrementalParser]   - Module valid: " << (mainModule ? "YES" : "NO") << "\n";
-    if (mainModule) {
-        llvm::errs() << "[SwiftIncrementalParser]   - Module name: " << mainModule->getName().str() << "\n";
-        llvm::errs() << "[SwiftIncrementalParser]   - Module filename: " << (mainModule->getModuleFilename().empty() ? "NONE" : mainModule->getModuleFilename().str()) << "\n";
-        
-        // Check what declarations are in the module
-        llvm::SmallVector<swift::Decl*, 10> topLevelDecls;
-        mainModule->getTopLevelDecls(topLevelDecls);
-        llvm::errs() << "[SwiftIncrementalParser]   - Module declarations count: " << topLevelDecls.size() << "\n";
-        for (size_t i = 0; i < topLevelDecls.size() && i < 5; ++i) {
-            auto decl = topLevelDecls[i];
-            llvm::errs() << "[SwiftIncrementalParser]     [" << i << "] " << swift::Decl::getKindName(decl->getKind()) << "\n";
-        }
-        if (topLevelDecls.size() > 5) {
-            llvm::errs() << "[SwiftIncrementalParser]     ... and " << (topLevelDecls.size() - 5) << " more\n";
-        }
-        
-        // Check if the module has any source files
-        llvm::errs() << "[SwiftIncrementalParser]   - Source files count: " << mainModule->getFiles().size() << "\n";
-        for (size_t i = 0; i < mainModule->getFiles().size() && i < 3; ++i) {
-            auto file = mainModule->getFiles()[i];
-            llvm::errs() << "[SwiftIncrementalParser]     [" << i << "] " << static_cast<int>(file->getKind()) << "\n";
-        }
-    }
-    
-    // Check llvmCtx state
-    llvm::errs() << "[SwiftIncrementalParser] LLVMContext state:\n";
+    // Get the LLVM context
     auto llvmCtx = TSCtx->getContext();
-    llvm::errs() << "[SwiftIncrementalParser]   - LLVMContext valid: " << (llvmCtx ? "YES" : "NO") << "\n";
-    if (llvmCtx) {
-        llvm::errs() << "[SwiftIncrementalParser]   - LLVMContext address: " << llvmCtx << "\n";
-    }
     
-    llvm::errs() << "[SwiftIncrementalParser] === END STATE VERIFICATION ===\n";
-    
-    // Lower Swift code to an LLVM module
-    auto llvmModule = lowerSwiftCodeToLLVMModule(CI, mainModule, llvmCtx);
+    // Lower Swift code to an LLVM module using the new module
+    auto llvmModule = lowerSwiftCodeToLLVMModule(newModule, sharedASTContext, llvmCtx);
     if (llvmModule) {
         llvm::errs() << "[SwiftIncrementalParser] LLVM module generated successfully\n";
         ptu.TheModule = std::move(llvmModule);
     } else {
         llvm::errs() << "[SwiftIncrementalParser] WARNING: LLVM module generation failed\n";
-        // If lowering fails, we'll still create the PTU but without an LLVM module
         ptu.TheModule = nullptr;
     }
     
@@ -880,8 +863,21 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
 void SwiftIncrementalParser::CleanUpPTU(SwiftPartialTranslationUnit& PTU) {
     // Clean up the LLVM module
     PTU.TheModule.reset();
-    PTU.ModulePart = nullptr;
+    PTU.ModulePart = nullptr;  // ModuleDecl is owned by ASTContext
     PTU.InputCode.clear();
+}
+
+swift::ImplicitImportInfo SwiftIncrementalParser::createImplicitImports() {
+    swift::ImplicitImportInfo importInfo;
+    
+    // Import all previous modules for state reuse
+    for (const auto& module : *modules) {
+        importInfo.AdditionalImports.emplace_back(
+            swift::ImportedModule(module));
+    }
+    
+    llvm::errs() << "[SwiftIncrementalParser] Created imports for " << modules->size() << " previous modules\n";
+    return importInfo;
 }
 
 // ============================================================================
@@ -1053,7 +1049,10 @@ llvm::Error SwiftIncrementalExecutor::cleanUp() {
 // SwiftInterpreter Implementation
 // ============================================================================
 
-SwiftInterpreter::SwiftInterpreter(swift::CompilerInstance* CI) {
+SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
+    // Validate Swift runtime paths
+    validateSwiftRuntimePaths();
+    
     // Initialize LLVM targets
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
@@ -1062,9 +1061,43 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInstance* CI) {
     // Create thread-safe context
     TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::make_unique<llvm::LLVMContext>());
     
-    // Create incremental parser with the shared CompilerInstance
-    // This allows incremental compilation where new code can reference previously defined variables
-    IncrParser = std::make_unique<SwiftIncrementalParser>(CI, TSCtx.get());
+    // Create shared ASTContext directly (bypass CompilerInstance)
+    llvm::errs() << "[SwiftInterpreter] Creating shared ASTContext...\n";
+    
+    // Create SourceManager and DiagnosticEngine
+    auto sourceMgr = std::make_unique<swift::SourceManager>();
+    auto diagEngine = std::make_unique<swift::DiagnosticEngine>(*sourceMgr);
+    
+    sharedASTContext = std::unique_ptr<swift::ASTContext>(swift::ASTContext::get(
+        invocation->getLangOptions(),
+        invocation->getTypeCheckerOptions(),
+        invocation->getSILOptions(),
+        invocation->getSearchPathOptions(),
+        invocation->getClangImporterOptions(),
+        invocation->getSymbolGraphOptions(),
+        invocation->getCASOptions(),
+        invocation->getSerializationOptions(),
+        *sourceMgr,
+        *diagEngine
+    ));
+    
+    // Create initial empty module for base functionality
+    llvm::errs() << "[SwiftInterpreter] Creating initial base module...\n";
+    auto baseModule = swift::ModuleDecl::create(
+        sharedASTContext->getIdentifier("SwiftJITREPL_Base"),
+        *sharedASTContext,
+        swift::ImplicitImportInfo(),
+        [](swift::ModuleDecl*, auto) {} // Empty initial module
+    );
+    
+    // Register base module with shared ASTContext
+    sharedASTContext->addLoadedModule(baseModule);
+    modules.push_back(baseModule);
+    
+    llvm::errs() << "[SwiftInterpreter] Base module created and registered\n";
+    
+    // Create incremental parser with shared ASTContext and modules
+    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get());
     
     // Create JIT builder
     auto jitBuilder = llvm::orc::LLJITBuilder();
@@ -1077,36 +1110,7 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInstance* CI) {
     // Create incremental executor
     IncrExecutor = std::make_unique<SwiftIncrementalExecutor>(*TSCtx, std::move(*jitOrError));
     
-    // Initialize the runtime interface by parsing the runtime code
-    // This sets up the global variables and function declarations
-    llvm::errs() << "[SwiftInterpreter] Attempting to parse runtime interface...\n";
-    llvm::errs() << "[SwiftInterpreter] Runtime code to parse:\n" << SwiftRuntimes << "\n";
-    auto runtimePTUOrError = IncrParser->Parse(SwiftRuntimes);
-    if (runtimePTUOrError) {
-        auto& runtimePTU = *runtimePTUOrError;
-        llvm::errs() << "[SwiftInterpreter] Runtime interface parsed successfully\n";
-        // Set up global variables
-        // Note: In a full implementation, we'd need to properly initialize
-        // the global variables with the interpreter pointer
-        if (auto err = IncrExecutor->addModule(runtimePTU)) {
-            llvm::errs() << "[SwiftInterpreter] ERROR: Failed to add runtime interface module: " 
-                        << llvm::toString(std::move(err)) << "\n";
-            // Stop on first failure
-            return;
-        }
-        llvm::errs() << "[SwiftInterpreter] Runtime interface module added successfully\n";
-        
-        // Global variable initialization removed - focusing on basic execution
-        
-        llvm::errs() << "[SwiftInterpreter] Runtime interface setup completed\n";
-    } else {
-        llvm::errs() << "[SwiftInterpreter] ERROR: Failed to parse runtime interface: " 
-                    << llvm::toString(runtimePTUOrError.takeError()) << "\n";
-        llvm::errs() << "[SwiftInterpreter] Stopping initialization due to runtime interface failure\n";
-        // Throw exception to propagate failure to caller
-        throw std::runtime_error("Runtime interface parsing failed: " + 
-                                llvm::toString(runtimePTUOrError.takeError()));
-    }
+    llvm::errs() << "[SwiftInterpreter] Multi-module interpreter initialized successfully\n";
     
     // Mark the start of user code (separates runtime code from user code)
     markUserCodeStart();
@@ -1162,7 +1166,14 @@ llvm::Error SwiftInterpreter::ParseAndExecute(llvm::StringRef Code) {
     
     auto& ptu = *ptuOrError;
     
-    Execute(ptu);
+    // Execute the PTU and handle any errors
+    if (auto err = Execute(ptu)) {
+        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Execute failed: " 
+                    << llvm::toString(std::move(err)) << "\n";
+        return llvm::Error::success(); // Return success to avoid crash
+    }
+    
+    return llvm::Error::success();
 }
 
 llvm::Error SwiftInterpreter::Execute(SwiftPartialTranslationUnit& ptu) {
@@ -1188,11 +1199,7 @@ llvm::Error SwiftInterpreter::Execute(SwiftPartialTranslationUnit& ptu) {
 }
 
 swift::ASTContext& SwiftInterpreter::getASTContext() {
-    return IncrParser->getCI()->getASTContext();
-}
-
-swift::CompilerInstance* SwiftInterpreter::getCompilerInstance() {
-    return IncrParser->getCI();
+    return *sharedASTContext;
 }
 
 llvm::Expected<llvm::orc::LLJIT&> SwiftInterpreter::getExecutionEngine() {

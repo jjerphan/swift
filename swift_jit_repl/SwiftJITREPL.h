@@ -32,6 +32,7 @@ namespace llvm {
 // Forward declarations for Swift types
 namespace swift {
     class CompilerInstance;
+    class CompilerInvocation;
     class Module;
     class ModuleDecl;
     class SourceFile;
@@ -39,6 +40,7 @@ namespace swift {
     class Expr;
     class Stmt;
     class ASTContext;
+    struct ImplicitImportInfo;
 }
 
 // Forward declarations for LLVM types
@@ -81,11 +83,15 @@ struct EvaluationResult {
 /**
  * Swift-specific partial translation unit (inspired by Clang's PartialTranslationUnit)
  * Represents a piece of Swift code that has been parsed and compiled incrementally
+ * Each PTU owns its own ModuleDecl for true state reuse via module imports
  */
 struct SwiftPartialTranslationUnit {
-    swift::ModuleDecl *ModulePart = nullptr;
+    swift::ModuleDecl* ModulePart = nullptr;  // Reference to ModuleDecl (owned by ASTContext)
     std::unique_ptr<llvm::Module> TheModule;
     std::string InputCode;
+    swift::ASTContext* SharedASTContext = nullptr;  // Reference to shared context
+    
+    SwiftPartialTranslationUnit() = default;
     
     bool operator==(const SwiftPartialTranslationUnit &other) const {
         return other.ModulePart == ModulePart && other.TheModule == TheModule;
@@ -94,17 +100,21 @@ struct SwiftPartialTranslationUnit {
 
 /**
  * Swift incremental parser (inspired by Clang's IncrementalParser)
- * Handles incremental parsing of Swift code without requiring a main function
+ * Handles incremental parsing of Swift code using multiple ModuleDecl instances
+ * Each Parse() call creates a new ModuleDecl with imports to previous modules for state reuse
  */
 class SwiftIncrementalParser {
 private:
-    swift::CompilerInstance* CI;
+    swift::ASTContext* sharedASTContext;
+    std::vector<swift::ModuleDecl*>* modules;  // Raw pointers (owned by ASTContext)
     llvm::orc::ThreadSafeContext* TSCtx;
     std::list<SwiftPartialTranslationUnit> PTUs;
     unsigned InputCount = 0;
     
 public:
-    SwiftIncrementalParser(swift::CompilerInstance* Instance, llvm::orc::ThreadSafeContext* TSCtx);
+    SwiftIncrementalParser(swift::ASTContext* sharedASTContext, 
+                          std::vector<swift::ModuleDecl*>* modules,
+                          llvm::orc::ThreadSafeContext* TSCtx);
     ~SwiftIncrementalParser();
     
     // Parse incremental Swift input and return a partial translation unit
@@ -116,8 +126,11 @@ public:
     // Clean up a specific PTU
     void CleanUpPTU(SwiftPartialTranslationUnit& PTU);
     
-    // Get the compiler instance
-    swift::CompilerInstance* getCI() { return CI; }
+    // Get the shared AST context
+    swift::ASTContext* getASTContext() const { return sharedASTContext; }
+    
+private:
+    swift::ImplicitImportInfo createImplicitImports();
 };
 
 /**
@@ -172,11 +185,13 @@ public:
 
 /**
  * Main Swift interpreter class (inspired by Clang's Interpreter)
- * Provides the main interface for incremental Swift code execution
+ * Provides the main interface for incremental Swift code execution using multiple modules
  */
 class SwiftInterpreter {
 private:
     std::unique_ptr<llvm::orc::ThreadSafeContext> TSCtx;
+    std::unique_ptr<swift::ASTContext> sharedASTContext;
+    std::vector<swift::ModuleDecl*> modules;  // Raw pointers (owned by ASTContext)
     std::unique_ptr<SwiftIncrementalParser> IncrParser;
     std::unique_ptr<SwiftIncrementalExecutor> IncrExecutor;
     
@@ -192,7 +207,7 @@ private:
     
 public:
     // LastValue removed - focusing on basic execution without value capture
-    SwiftInterpreter(swift::CompilerInstance* CI);
+    SwiftInterpreter(swift::CompilerInvocation* invocation);
     ~SwiftInterpreter();
     
     // Mark the start of user code (separates runtime code from user code)
@@ -210,11 +225,11 @@ public:
     // Execute a partial translation unit
     llvm::Error Execute(SwiftPartialTranslationUnit& PTU);
     
-    // Get the AST context
+    // Get the shared AST context
     swift::ASTContext& getASTContext();
     
-    // Get the compiler instance
-    swift::CompilerInstance* getCompilerInstance();
+    // Get all modules
+    const std::vector<swift::ModuleDecl*>& getModules() const { return modules; }
     
     // Get the execution engine
     llvm::Expected<llvm::orc::LLJIT&> getExecutionEngine();
@@ -331,15 +346,7 @@ public:
      * @return Vector of results corresponding to each expression
      */
     std::vector<EvaluationResult> evaluateMultiple(const std::vector<std::string>& expressions);
-    
-    /**
-     * Add a Swift source file to the compilation context
-     * @param source_code Swift source code
-     * @param filename Optional filename for error reporting
-     * @return true if addition was successful
-     */
-    bool addSourceFile(const std::string& source_code, const std::string& filename = "input.swift");
-    
+
     /**
      * Reset the REPL context (clears all compiled code and state)
      * @return true if reset was successful

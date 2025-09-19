@@ -35,16 +35,17 @@ int main() {
     std::cout << "REPL initialized successfully!\n";
     std::cout << "About to start expression evaluation...\n\n";
     
-    // Test expressions
+    // Test expressions - focusing on state reuse between evaluations
     std::vector<std::string> expressions = {
-        "42",
-        "3.14 * 2",
-        "1 + 2 + 3 + 4 + 5",
-        "let x = 10; x * x",
-        "\"Hello, Swift!\".count",
-        "Array(1...10).reduce(0, +)",
-        "let numbers = [1, 2, 3, 4, 5]; numbers.map { $0 * 2 }.reduce(0, +)",
-        "let factorial = { (n: Int) -> Int in n <= 1 ? 1 : n * factorial(n - 1) }; factorial(5)"
+        "let a = 5",
+        "let b = 10", 
+        "a + b",
+        "a * b",
+        "b / a",
+        "let c = a + b",
+        "c * 2",
+        "let d = c + a",
+        "d - b"
     };
     
     std::cout << "Evaluating expressions:\n";
