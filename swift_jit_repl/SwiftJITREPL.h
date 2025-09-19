@@ -162,6 +162,9 @@ public:
     // Execute the JIT'd code
     llvm::Error execute();
     
+    // Run global constructors (like Clang IncrementalExecutor)
+    llvm::Error runCtors() const;
+    
     // Get symbol address
     llvm::Expected<llvm::orc::ExecutorAddr> getSymbolAddress(llvm::StringRef Name) const;
     
