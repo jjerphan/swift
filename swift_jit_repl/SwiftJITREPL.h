@@ -112,13 +112,17 @@ private:
     swift::ASTContext* sharedASTContext;
     std::vector<swift::ModuleDecl*>* modules;  // Raw pointers (owned by ASTContext)
     llvm::orc::ThreadSafeContext* TSCtx;
+    swift::CompilerInstance* sharedCompilerInstance;  // Reference to shared CompilerInstance
+    swift::CompilerInvocation* compilerInvocation;  // Reference to shared CompilerInvocation
     std::list<SwiftPartialTranslationUnit> PTUs;
     unsigned InputCount = 0;
     
 public:
     SwiftIncrementalParser(swift::ASTContext* sharedASTContext, 
                           std::vector<swift::ModuleDecl*>* modules,
-                          llvm::orc::ThreadSafeContext* TSCtx);
+                          llvm::orc::ThreadSafeContext* TSCtx,
+                          swift::CompilerInstance* sharedCompilerInstance,
+                          swift::CompilerInvocation* compilerInvocation);
     ~SwiftIncrementalParser();
     
     // Parse incremental Swift input and return a partial translation unit
@@ -202,6 +206,7 @@ private:
     std::unique_ptr<SwiftIncrementalParser> IncrParser;
     std::unique_ptr<SwiftIncrementalExecutor> IncrExecutor;
     std::unique_ptr<swift::CompilerInstance> compilerInstance;  // For proper SourceManager initialization
+    swift::CompilerInvocation* compilerInvocation;  // Reference to shared compiler invocation
     
     // Runtime interface builder for value capture
     std::unique_ptr<SwiftRuntimeInterfaceBuilder> RuntimeIB;
@@ -302,16 +307,6 @@ public:
     SwiftJITREPL(SwiftJITREPL&& other) noexcept;
     SwiftJITREPL& operator=(SwiftJITREPL&& other) noexcept;
     
-    /**
-     * Initialize the JIT REPL
-     * @return true if initialization was successful
-     */
-    bool initialize();
-    
-    /**
-     * Check if the REPL is properly initialized
-     */
-    bool isInitialized() const;
     
     /**
      * Evaluate a Swift expression

@@ -68,6 +68,8 @@ static_assert(sizeof(SWIFT_SDK_PATH) > 1, "SWIFT_SDK_PATH must be defined");
 #include "swift/AST/Import.h"
 #include "swift/Subsystems.h"
 
+// Note: We override the existing AccessLevelRequest to make all declarations public by default
+
 // LLVM IR parsing utilities (to reparse IR into our shared LLVMContext)
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Support/SourceMgr.h"
@@ -124,8 +126,31 @@ static void validateSwiftRuntimePaths() {
 #include "llvm/Support/Error.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/MC/TargetRegistry.h"
 
 namespace SwiftJITREPL {
+
+// Global flag to ensure LLVM targets are initialized only once
+static bool g_llvmTargetsInitialized = false;
+static std::mutex g_llvmInitMutex;
+
+/**
+ * Helper function to initialize LLVM targets (thread-safe, only once)
+ */
+void initializeLLVMTargetsOnce() {
+    std::lock_guard<std::mutex> lock(g_llvmInitMutex);
+    if (!g_llvmTargetsInitialized) {
+        llvm::errs() << "[initializeLLVMTargetsOnce] Initializing LLVM targets...\n";
+        llvm::InitializeAllTargets();
+        llvm::InitializeAllTargetMCs();
+        llvm::InitializeAllAsmPrinters();
+        llvm::InitializeAllAsmParsers();
+        llvm::InitializeAllDisassemblers();
+        llvm::InitializeAllTargetInfos();
+        g_llvmTargetsInitialized = true;
+        llvm::errs() << "[initializeLLVMTargetsOnce] LLVM targets initialized successfully\n";
+    }
+}
 
 /**
  * Helper function to validate Swift identifiers
@@ -288,36 +313,10 @@ private:
     std::string transformForValuePrinting(const std::string& code) {
         llvm::errs() << "[transformForValuePrinting] Input code: '" << code << "'\n";
         
-        // Transform the code to make variables public for cross-module access
+        // Leave the code unchanged - no transformation needed
         std::string result = code;
         
-        // Add 'public' to variable declarations for cross-module access
-        // Pattern: "let " -> "public let ", "var " -> "public var "
-        size_t pos = 0;
-        while ((pos = result.find("let ", pos)) != std::string::npos) {
-            // Check if it's not already "public let"
-            if (pos == 0 || result.substr(pos - 6, 6) != "public") {
-                result.insert(pos, "public ");
-                pos += 11; // "public let ".length()
-            } else {
-                pos += 4; // "let ".length()
-            }
-        }
-        
-        pos = 0;
-        while ((pos = result.find("var ", pos)) != std::string::npos) {
-            // Check if it's not already "public var"
-            if (pos == 0 || result.substr(pos - 6, 6) != "public") {
-                result.insert(pos, "public ");
-                pos += 11; // "public var ".length()
-            } else {
-                pos += 4; // "var ".length()
-            }
-        }
-        
-        result += "\n";
-        
-        llvm::errs() << "[transformForValuePrinting] Generated Swift code (with public exports):\n" << result << "\n";
+        llvm::errs() << "[transformForValuePrinting] Generated Swift code (unchanged):\n" << result << "\n";
         return result;
     }
 };
@@ -374,23 +373,16 @@ public:
     static bool llvmInitialized;
 
     explicit Impl(const REPLConfig& cfg) : config(cfg) {
-        // Ensure LLVM is initialized (thread-safe)
-        std::lock_guard<std::mutex> lock(initMutex);
-        if (!llvmInitialized) {
-            // Initialize basic LLVM subsystems
-            llvm::InitializeAllTargetInfos();
-            llvm::InitializeAllTargets();
-            llvm::InitializeAllTargetMCs();
-            llvm::InitializeAllAsmPrinters();
-            llvm::InitializeAllAsmParsers();
-            Impl::llvmInitialized = true;
-        }
+        initialize();
     }
     
     ~Impl() = default;
     
+private:
     bool initialize() {
         try {
+            // Initialize LLVM targets FIRST before any other operations (only once)
+            initializeLLVMTargetsOnce();
             
             // Create and configure the compiler invocation for JIT/REPL mode
             // We only need the CompilerInvocation, not the full CompilerInstance
@@ -401,6 +393,13 @@ public:
             
             // Set up frontend options for SIL generation (to generate SIL functions)
             compilerInvocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
+            
+            // Set the correct search paths for Swift standard library using compile time values
+            auto &searchPaths = compilerInvocation.getSearchPathOptions();
+            searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
+            searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+            searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
+            searchPaths.setSDKPath(SWIFT_SDK_PATH);
             
             // Set up command line arguments for immediate mode
             std::vector<std::string> immediateArgs = {"swift", "-i"};
@@ -425,13 +424,6 @@ public:
                 compilerInvocation.getIRGenOptions().DebugInfoFormat = swift::IRGenDebugInfoFormat::DWARF;
             }
             
-            // Set the correct search paths for Swift standard library using compile time values
-            auto &searchPaths = compilerInvocation.getSearchPathOptions();
-            searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
-            searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
-            searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
-            searchPaths.setSDKPath(SWIFT_SDK_PATH);
- 
             // Record the actual module name used
             currentModuleName = moduleName;
             
@@ -443,6 +435,7 @@ public:
             if (tempCI->setup(compilerInvocation, setupError)) {
                 llvm::errs() << "[SwiftJITREPL::initialize] CompilerInstance setup failed: " << setupError << "\n";
                 lastError = "Failed to validate Swift compiler configuration: " + (setupError.empty() ? "Unknown error" : setupError);
+                initialized = false;
                 return false;
             }
             // Configuration is valid, we can discard the temporary CompilerInstance
@@ -458,9 +451,16 @@ public:
             
         } catch (const std::exception& e) {
             lastError = std::string("Initialization failed: ") + e.what();
+            initialized = false;
+            return false;
+        } catch (...) {
+            lastError = "Initialization failed: Unknown error";
+            initialized = false;
             return false;
         }
     }
+    
+public:
     
     EvaluationResult evaluate(const std::string& expression) {
         llvm::errs() << "[SwiftJITREPL::evaluate] Starting evaluation of: " << expression << "\n";
@@ -514,9 +514,6 @@ public:
         return lastError;
     }
     
-    bool isInitialized() const {
-        return initialized;
-    }
     
     bool reset() {
         try {
@@ -536,8 +533,8 @@ public:
             // Reset interpreter
             interpreter.reset();
             
-            // Reinitialize with a fresh CompilerInstance
-            // This will create a completely new CompilerInstance with no input files
+            // Reinitialize with a fresh interpreter
+            // This will create a completely new interpreter with no input files
             return initialize();
             
         } catch (const std::exception& e) {
@@ -587,14 +584,6 @@ bool SwiftJITREPL::Impl::llvmInitialized = false;
 SwiftJITREPL::SwiftJITREPL(const REPLConfig& config) : pImpl(std::make_unique<Impl>(config)) {}
 
 SwiftJITREPL::~SwiftJITREPL() = default;
-
-bool SwiftJITREPL::initialize() {
-    return pImpl->initialize();
-}
-
-bool SwiftJITREPL::isInitialized() const {
-    return pImpl->isInitialized();
-}
 
 EvaluationResult SwiftJITREPL::evaluate(const std::string& expression) {
     return pImpl->evaluate(expression);
@@ -659,6 +648,9 @@ SwiftJITREPL::CompilationStats SwiftJITREPL::getStats() const {
 bool SwiftJITREPL::isSwiftJITAvailable() {
     // Check if Swift JIT is available by attempting to create a minimal instance
     try {
+        // Initialize LLVM targets FIRST before any CompilerInstance operations (only once)
+        initializeLLVMTargetsOnce();
+        
         // Create and configure the compiler invocation for JIT mode
         swift::CompilerInvocation invocation;
         
@@ -708,9 +700,6 @@ bool SwiftJITREPL::isSwiftJITAvailable() {
 
 EvaluationResult evaluateSwiftExpression(const std::string& expression, const REPLConfig& config) {
     SwiftJITREPL repl(config);
-    if (!repl.initialize()) {
-        return EvaluationResult("Failed to initialize REPL: " + repl.getLastError());
-    }
     return repl.evaluate(expression);
 }
 
@@ -724,8 +713,10 @@ bool isSwiftJITAvailable() {
 
 SwiftIncrementalParser::SwiftIncrementalParser(swift::ASTContext* sharedASTContext, 
                                                std::vector<swift::ModuleDecl*>* modules,
-                                               llvm::orc::ThreadSafeContext* TSCtx)
-    : sharedASTContext(sharedASTContext), modules(modules), TSCtx(TSCtx) {
+                                               llvm::orc::ThreadSafeContext* TSCtx,
+                                               swift::CompilerInstance* sharedCompilerInstance,
+                                               swift::CompilerInvocation* compilerInvocation)
+    : sharedASTContext(sharedASTContext), modules(modules), TSCtx(TSCtx), sharedCompilerInstance(sharedCompilerInstance), compilerInvocation(compilerInvocation) {
 }
 
 SwiftIncrementalParser::~SwiftIncrementalParser() {
@@ -745,14 +736,9 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     // Create module with Swift standard library import
     swift::ImplicitImportInfo importInfo;
     
-    // Add Swift standard library import
-    auto swiftModule = sharedASTContext->getLoadedModule(sharedASTContext->getIdentifier("Swift"));
-    if (swiftModule) {
-        importInfo.AdditionalImports.push_back(swift::ImportedModule(swiftModule));
-        llvm::errs() << "[SwiftIncrementalParser] Added Swift standard library import\n";
-    } else {
-        llvm::errs() << "[SwiftIncrementalParser] WARNING: Swift standard library not found\n";
-    }
+    // Swift standard library will be automatically imported by the CompilerInstance
+    // when we call performSema() - no need to manually add it here
+    llvm::errs() << "[SwiftIncrementalParser] Swift standard library will be imported automatically\n";
     
     // Add imports for all previous modules to enable state reuse
     for (auto prevModule : *modules) {
@@ -843,20 +829,22 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     // Perform semantic analysis on the new module
     llvm::errs() << "[SwiftIncrementalParser] Performing semantic analysis...\n";
     
-    // Create a temporary CompilerInstance for semantic analysis
+    // Create a new CompilerInstance for this module but use the shared ASTContext
+    // This ensures the Swift standard library is available from the shared context
+    llvm::errs() << "[SwiftIncrementalParser] Creating new CompilerInstance with shared ASTContext\n";
+    
     auto tempCI = std::make_unique<swift::CompilerInstance>();
-    swift::CompilerInvocation invocation;
-    invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
-    invocation.getLangOptions().EnableObjCInterop = false;
+    
+    // Use the passed compilerInvocation but update module-specific settings
+    swift::CompilerInvocation invocation = *compilerInvocation;
     invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
     invocation.getFrontendOptions().ModuleName = moduleName;
     
-    // Set up search paths
-    auto &searchPaths = invocation.getSearchPathOptions();
-    searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
-    searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
-    searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
-    searchPaths.setSDKPath(SWIFT_SDK_PATH);
+    // Add detailed logging for CompilerInstance setup
+    llvm::errs() << "[SwiftIncrementalParser] About to setup CompilerInstance with invocation\n";
+    llvm::errs() << "[SwiftIncrementalParser] Invocation module name: " << invocation.getFrontendOptions().ModuleName << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Invocation target: " << invocation.getLangOptions().Target.str() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Invocation action: " << (int)invocation.getFrontendOptions().RequestedAction << "\n";
     
     std::string setupError;
     if (tempCI->setup(invocation, setupError)) {
@@ -865,8 +853,46 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
                                        "Failed to setup CompilerInstance: " + setupError);
     }
     
+    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance setup successful\n";
+    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance ASTContext: " << &tempCI->getASTContext() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance SourceManager: " << &tempCI->getSourceMgr() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance DiagnosticEngine: " << &tempCI->getDiags() << "\n";
+    
     // Set the main module to our new module
     tempCI->setMainModule(newModule);
+    
+    // Add detailed logging for import resolution debugging
+    llvm::errs() << "[SwiftIncrementalParser] About to call performSema() - this will trigger import resolution\n";
+    llvm::errs() << "[SwiftIncrementalParser] Module name: " << newModule->getName() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Module is main module: " << newModule->isMainModule() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Module files count: " << newModule->getFiles().size() << "\n";
+    
+    // Log the ASTContext state
+    llvm::errs() << "[SwiftIncrementalParser] ASTContext had error before performSema: " << sharedASTContext->hadError() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] ASTContext Diags had error before performSema: " << sharedASTContext->Diags.hadAnyError() << "\n";
+    
+    // Log search paths
+    auto &searchPaths2 = invocation.getSearchPathOptions();
+    llvm::errs() << "[SwiftIncrementalParser] Runtime library paths count: " << searchPaths2.RuntimeLibraryPaths.size() << "\n";
+    for (size_t i = 0; i < searchPaths2.RuntimeLibraryPaths.size(); ++i) {
+        llvm::errs() << "[SwiftIncrementalParser]   Runtime path " << i << ": " << searchPaths2.RuntimeLibraryPaths[i] << "\n";
+    }
+    llvm::errs() << "[SwiftIncrementalParser] Runtime resource path: " << searchPaths2.RuntimeResourcePath << "\n";
+    
+    // Check if Swift standard library is already loaded
+    auto swiftModule = sharedASTContext->getLoadedModule(sharedASTContext->getIdentifier("Swift"));
+    llvm::errs() << "[SwiftIncrementalParser] Swift standard library already loaded: " << (swiftModule != nullptr) << "\n";
+    if (swiftModule) {
+        llvm::errs() << "[SwiftIncrementalParser] Swift module name: " << swiftModule->getName() << "\n";
+        llvm::errs() << "[SwiftIncrementalParser] Swift module files count: " << swiftModule->getFiles().size() << "\n";
+    }
+    
+    // Log loaded modules
+    auto loadedModules = sharedASTContext->getLoadedModules();
+    llvm::errs() << "[SwiftIncrementalParser] Loaded modules count: " << std::distance(loadedModules.begin(), loadedModules.end()) << "\n";
+    for (auto &pair : loadedModules) {
+        llvm::errs() << "[SwiftIncrementalParser]   Loaded module: " << pair.first << " -> " << pair.second->getName() << "\n";
+    }
     
     // Perform semantic analysis
     tempCI->performSema();
@@ -879,8 +905,62 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     llvm::errs() << "[SwiftIncrementalParser] AST had error: " << astHadError << "\n";
     llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << diagsHadError << "\n";
     
+    // Log detailed state after performSema
+    llvm::errs() << "[SwiftIncrementalParser] After performSema - Module state:\n";
+    llvm::errs() << "[SwiftIncrementalParser]   Module name: " << newModule->getName() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser]   Module files count: " << newModule->getFiles().size() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser]   Module has resolved imports: " << newModule->hasResolvedImports() << "\n";
+    
+    // Log the SourceFile state
+    for (auto *file : newModule->getFiles()) {
+        auto *SF = llvm::dyn_cast<swift::SourceFile>(file);
+        if (SF) {
+            llvm::errs() << "[SwiftIncrementalParser]   SourceFile: " << SF->getFilename() << "\n";
+            llvm::errs() << "[SwiftIncrementalParser]   SourceFile AST stage: " << (int)SF->ASTStage << "\n";
+            llvm::errs() << "[SwiftIncrementalParser]   SourceFile top-level decls count: " << SF->getTopLevelDecls().size() << "\n";
+            
+            // Log the top-level declarations
+            for (size_t i = 0; i < SF->getTopLevelDecls().size(); ++i) {
+                auto decl = SF->getTopLevelDecls()[i];
+                llvm::errs() << "[SwiftIncrementalParser]     Top-level decl " << i << ": " << swift::Decl::getKindName(decl->getKind()) << "\n";
+                if (auto *topLevelCode = llvm::dyn_cast<swift::TopLevelCodeDecl>(decl)) {
+                    llvm::errs() << "[SwiftIncrementalParser]       TopLevelCode body statements count: " << topLevelCode->getBody()->getElements().size() << "\n";
+                    for (size_t j = 0; j < topLevelCode->getBody()->getElements().size(); ++j) {
+                        auto stmt = topLevelCode->getBody()->getElements()[j];
+                        llvm::errs() << "[SwiftIncrementalParser]         Statement " << j << ": " << (stmt.is<swift::Stmt*>() ? "Stmt" : "Decl") << "\n";
+                    }
+                }
+            }
+        }
+    }
+    
+    // Log ASTContext state after performSema
+    llvm::errs() << "[SwiftIncrementalParser] After performSema - ASTContext state:\n";
+    llvm::errs() << "[SwiftIncrementalParser]   ASTContext had error: " << sharedASTContext->hadError() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser]   ASTContext Diags had error: " << sharedASTContext->Diags.hadAnyError() << "\n";
+    
+    // Check if Swift standard library is now loaded
+    auto swiftModuleAfter = sharedASTContext->getLoadedModule(sharedASTContext->getIdentifier("Swift"));
+    llvm::errs() << "[SwiftIncrementalParser] Swift standard library loaded after performSema: " << (swiftModuleAfter != nullptr) << "\n";
+    if (swiftModuleAfter) {
+        llvm::errs() << "[SwiftIncrementalParser] Swift module name after: " << swiftModuleAfter->getName() << "\n";
+        llvm::errs() << "[SwiftIncrementalParser] Swift module files count after: " << swiftModuleAfter->getFiles().size() << "\n";
+    }
+    
+    // Log loaded modules after performSema
+    auto loadedModulesAfter = sharedASTContext->getLoadedModules();
+    llvm::errs() << "[SwiftIncrementalParser] Loaded modules count after performSema: " << std::distance(loadedModulesAfter.begin(), loadedModulesAfter.end()) << "\n";
+    for (auto &pair : loadedModulesAfter) {
+        llvm::errs() << "[SwiftIncrementalParser]   Loaded module after: " << pair.first << " -> " << pair.second->getName() << "\n";
+    }
+    
     if (astHadError || diagsHadError) {
         llvm::errs() << "[SwiftIncrementalParser] ERROR: Semantic analysis failed\n";
+        
+        // Try to print diagnostic information
+        llvm::errs() << "[SwiftIncrementalParser] Attempting to print diagnostic information...\n";
+        auto& diagEngine = tempCI->getDiags();
+        llvm::errs() << "[SwiftIncrementalParser] Diagnostic engine available\n";
         
         // Print module state for debugging
         llvm::SmallVector<swift::Decl*, 32> topLevelDecls;
@@ -1150,13 +1230,27 @@ llvm::Error SwiftIncrementalExecutor::cleanUp() {
 // ============================================================================
 
 SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
+    // Store reference to compiler invocation
+    compilerInvocation = invocation;
+    
     // Validate Swift runtime paths
     validateSwiftRuntimePaths();
     
-    // Initialize LLVM targets
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    llvm::InitializeNativeTargetAsmParser();
+    // Initialize LLVM targets manually (equivalent to INITIALIZE_LLVM macro) - only once
+    initializeLLVMTargetsOnce();
+    
+    // Verify target registration
+    llvm::errs() << "[SwiftInterpreter] Verifying target registration...\n";
+    auto targetTriple = llvm::Triple("x86_64-unknown-linux-gnu");
+    llvm::errs() << "[SwiftInterpreter] Target triple: " << targetTriple.str() << "\n";
+    
+    std::string targetError;
+    auto target = llvm::TargetRegistry::lookupTarget(targetTriple.str(), targetError);
+    if (target) {
+        llvm::errs() << "[SwiftInterpreter] Target found: " << target->getName() << "\n";
+    } else {
+        llvm::errs() << "[SwiftInterpreter] ERROR: Target not found: " << targetError << "\n";
+    }
     
     // Note: Swift runtime loading is handled internally by the CompilerInstance
     // when we call performSema() or other Swift compiler functions
@@ -1191,28 +1285,19 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     // Store the CompilerInstance for later use
     this->compilerInstance = std::move(compilerInstance);
     
+    // Note: Access level override removed due to API compatibility issues
+    // The multi-module approach with explicit imports should handle cross-module access
+    
     // Create initial empty module for base functionality
     llvm::errs() << "[SwiftInterpreter] Creating initial base module...\n";
     
-    // First, load the Swift standard library
-    auto swiftModule = sharedASTContext->getLoadedModule(sharedASTContext->getIdentifier("Swift"));
-    if (!swiftModule) {
-        // Try to load Swift standard library
-        swift::ImplicitImportInfo swiftImportInfo;
-        swiftModule = swift::ModuleDecl::create(sharedASTContext->getIdentifier("Swift"), *sharedASTContext, swiftImportInfo, [](swift::ModuleDecl*, auto){});
-        if (swiftModule) {
-            sharedASTContext->addLoadedModule(swiftModule);
-            llvm::errs() << "[SwiftInterpreter] Swift standard library loaded\n";
-        } else {
-            llvm::errs() << "[SwiftInterpreter] WARNING: Failed to load Swift standard library\n";
-        }
-    }
+    // Let the CompilerInstance handle Swift standard library loading
+    // The CompilerInstance will automatically load the Swift standard library
+    // when we call performSema() or other Swift compiler functions
+    llvm::errs() << "[SwiftInterpreter] Swift standard library will be loaded automatically by CompilerInstance\n";
     
-    // Create base module with Swift import
+    // Create base module - Swift standard library will be imported automatically
     swift::ImplicitImportInfo baseImportInfo;
-    if (swiftModule) {
-        baseImportInfo.AdditionalImports.push_back(swift::ImportedModule(swiftModule));
-    }
     
     auto baseModule = swift::ModuleDecl::createMainModule(
         *sharedASTContext,
@@ -1228,7 +1313,7 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     llvm::errs() << "[SwiftInterpreter] Base module created and registered\n";
     
     // Create incremental parser with shared ASTContext and modules
-    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get());
+    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), compilerInstance.get(), compilerInvocation);
     
     // Create JIT builder
     auto jitBuilder = llvm::orc::LLJITBuilder();

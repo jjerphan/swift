@@ -251,17 +251,34 @@ class Verifier : public ASTWalker {
         Ctx(isa<ModuleDecl *>(M) ? cast<ModuleDecl *>(M)->getASTContext()
                                  : cast<SourceFile *>(M)->getASTContext()),
         Out(llvm::errs()), HadError(Ctx.hadError()) {
+    llvm::errs() << "[Verifier::Verifier] Creating Verifier for SourceFile\n";
+    llvm::errs() << "[Verifier::Verifier] ASTContext had error: " << HadError << "\n";
     pushScope(DC);
+    llvm::errs() << "[Verifier::Verifier] Initial scope pushed\n";
   }
 
   /// Emit an error message and abort, optionally dumping the expression.
   /// \param E if non-null, the expression to dump() followed by a new-line.
   void error(llvm::StringRef msg, Expr *E = nullptr) {
+    llvm::errs() << "[Verifier::error] AST verification error: " << msg << "\n";
+    llvm::errs() << "[Verifier::error] Error context:\n";
+    llvm::errs() << "[Verifier::error]   - Module: " << getModuleContext()->getName().str() << "\n";
+    llvm::errs() << "[Verifier::error]   - ASTContext had error: " << Ctx.hadError() << "\n";
+    
     Out << msg << "\n";
     if (E) {
+      llvm::errs() << "[Verifier::error] Dumping expression:\n";
+      llvm::errs() << "[Verifier::error] Expression kind: " << swift::Expr::getKindName(E->getKind()) << "\n";
+      llvm::errs() << "[Verifier::error] Expression type: ";
+      if (E->getType()) {
+        llvm::errs() << E->getType().getString() << "\n";
+      } else {
+        llvm::errs() << "NULL\n";
+      }
       E->dump(Out);
       Out << "\n";
     }
+    llvm::errs() << "[Verifier::error] Aborting due to AST verification failure\n";
     abort();
   }
 
@@ -290,6 +307,24 @@ public:
   }
 
   PreWalkResult<Expr *> walkToExprPre(Expr *E) override {
+    // Only log for our specific test case
+    if (auto *sourceFile = M.dyn_cast<SourceFile *>()) {
+      if (sourceFile->getFilename().contains("swift_repl_input")) {
+        llvm::errs() << "[Verifier::walkToExprPre] Visiting expr: " << swift::Expr::getKindName(E->getKind()) << "\n";
+        llvm::errs() << "[Verifier::walkToExprPre]   - Expression type: ";
+        if (E->getType()) {
+          llvm::errs() << E->getType().getString() << "\n";
+        } else {
+          llvm::errs() << "NULL\n";
+        }
+        llvm::errs() << "[Verifier::walkToExprPre]   - Expression source location: ";
+        if (E->getLoc().isValid()) {
+          llvm::errs() << "valid\n";
+        } else {
+          llvm::errs() << "invalid\n";
+        }
+      }
+    }
     switch (E->getKind()) {
 #define DISPATCH(ID) return dispatchVisitPreExpr(static_cast<ID##Expr*>(E))
 #define EXPR(ID, PARENT) \
@@ -326,6 +361,7 @@ public:
     }
 
     PreWalkResult<Stmt *> walkToStmtPre(Stmt *S) override {
+      llvm::errs() << "[Verifier::walkToStmtPre] Visiting stmt: " << swift::Stmt::getKindName(S->getKind()) << "\n";
       switch (S->getKind()) {
 #define DISPATCH(ID) return dispatchVisitPreStmt(static_cast<ID##Stmt*>(S))
 #define STMT(ID, PARENT) \
@@ -349,8 +385,14 @@ public:
       llvm_unreachable("not all cases handled!");
     }
 
-    PreWalkResult<Pattern *> walkToPatternPre(Pattern *P) override {
-      switch (P->getKind()) {
+  PreWalkResult<Pattern *> walkToPatternPre(Pattern *P) override {
+    // Only log for our specific test case
+    if (auto *sourceFile = M.dyn_cast<SourceFile *>()) {
+      if (sourceFile->getFilename().contains("swift_repl_input")) {
+        llvm::errs() << "[Verifier::walkToPatternPre] Visiting pattern: " << swift::Pattern::getKindName(P->getKind()) << "\n";
+      }
+    }
+    switch (P->getKind()) {
 #define DISPATCH(ID) \
         return dispatchVisitPrePattern(static_cast<ID##Pattern*>(P))
 #define PATTERN(ID, PARENT) \
@@ -375,8 +417,27 @@ public:
       llvm_unreachable("not all cases handled!");
     }
 
-    PreWalkAction walkToDeclPre(Decl *D) override {
-      switch (D->getKind()) {
+  PreWalkAction walkToDeclPre(Decl *D) override {
+    // Only log for our specific test case
+    if (auto *sourceFile = M.dyn_cast<SourceFile *>()) {
+      if (sourceFile->getFilename().contains("swift_repl_input")) {
+        llvm::errs() << "[Verifier::walkToDeclPre] Visiting decl: " << swift::Decl::getKindName(D->getKind()) << "\n";
+        llvm::errs() << "[Verifier::walkToDeclPre]   - Decl name: ";
+        if (auto *valueDecl = dyn_cast<ValueDecl>(D)) {
+          llvm::SmallString<64> scratch;
+          llvm::errs() << valueDecl->getName().getString(scratch) << "\n";
+        } else {
+          llvm::errs() << "unnamed\n";
+        }
+        llvm::errs() << "[Verifier::walkToDeclPre]   - Decl source location: ";
+        if (D->getLoc().isValid()) {
+          llvm::errs() << "valid\n";
+        } else {
+          llvm::errs() << "invalid\n";
+        }
+      }
+    }
+    switch (D->getKind()) {
 #define DISPATCH(ID) return dispatchVisitPre(static_cast<ID##Decl*>(D))
 #define DECL(ID, PARENT) \
       case DeclKind::ID: \
@@ -3898,15 +3959,38 @@ static bool shouldVerifyGivenContext(const ASTContext &ctx) {
 }
 
 void swift::verify(SourceFile &SF) {
-  if (!shouldVerifyGivenContext(SF.getASTContext()))
+  // Only log for our specific test case, not the entire Swift standard library
+  if (SF.getFilename().contains("swift_repl_input")) {
+    llvm::errs() << "[swift::verify(SourceFile)] Starting verification for: " << SF.getFilename() << "\n";
+    llvm::errs() << "[swift::verify(SourceFile)] SourceFile details:\n";
+    llvm::errs() << "[swift::verify(SourceFile)]   - Module: " << SF.getParentModule()->getName().str() << "\n";
+    llvm::errs() << "[swift::verify(SourceFile)]   - AST stage: " << (int)SF.ASTStage << "\n";
+    llvm::errs() << "[swift::verify(SourceFile)]   - Top-level decls count: " << SF.getTopLevelDecls().size() << "\n";
+    llvm::errs() << "[swift::verify(SourceFile)]   - ASTContext had error: " << SF.getASTContext().hadError() << "\n";
+  }
+  
+  if (!shouldVerifyGivenContext(SF.getASTContext())) {
+    llvm::errs() << "[swift::verify(SourceFile)] Verification skipped due to context check\n";
     return;
+  }
+  
+  llvm::errs() << "[swift::verify(SourceFile)] Creating Verifier\n";
   Verifier verifier(SF, &SF);
+  
+  llvm::errs() << "[swift::verify(SourceFile)] Walking AST with verifier\n";
   SF.walk(verifier);
+  llvm::errs() << "[swift::verify(SourceFile)] AST walk completed\n";
 
   // Verify the AvailabilityScope hierarchy.
   if (auto scope = SF.getAvailabilityScope()) {
+    llvm::errs() << "[swift::verify(SourceFile)] Verifying AvailabilityScope\n";
     scope->verify(SF.getASTContext());
+    llvm::errs() << "[swift::verify(SourceFile)] AvailabilityScope verification completed\n";
+  } else {
+    llvm::errs() << "[swift::verify(SourceFile)] No AvailabilityScope to verify\n";
   }
+  
+  llvm::errs() << "[swift::verify(SourceFile)] Verification completed for: " << SF.getFilename() << "\n";
 }
 
 bool swift::shouldVerify(const Decl *D, const ASTContext &Context) {
