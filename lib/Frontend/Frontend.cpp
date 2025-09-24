@@ -309,12 +309,15 @@ void CompilerInstance::recordPrimaryInputBuffer(unsigned BufID) {
 }
 
 bool CompilerInstance::setUpASTContextIfNeeded() {
+  llvm::errs() << "[setUpASTContextIfNeeded] Starting ASTContext setup\n";
+  
   if (FrontendOptions::doesActionBuildModuleFromInterface(
           Invocation.getFrontendOptions().RequestedAction) &&
       !Invocation.getFrontendOptions().ExplicitInterfaceBuild) {
     // Compiling a module interface from source uses its own CompilerInstance
     // with options read from the input file. Don't bother setting up an
     // ASTContext at this level.
+    llvm::errs() << "[setUpASTContextIfNeeded] Action builds module from interface, skipping ASTContext setup\n";
     return false;
   }
 
@@ -323,12 +326,14 @@ bool CompilerInstance::setUpASTContextIfNeeded() {
   Invocation.getLangOptions().RecordRequestReferences
     = !isWholeModuleCompilation();
 
+  llvm::errs() << "[setUpASTContextIfNeeded] About to create ASTContext\n";
   Context.reset(ASTContext::get(
       Invocation.getLangOptions(), Invocation.getTypeCheckerOptions(),
       Invocation.getSILOptions(), Invocation.getSearchPathOptions(),
       Invocation.getClangImporterOptions(), Invocation.getSymbolGraphOptions(),
       Invocation.getCASOptions(), Invocation.getSerializationOptions(),
       SourceMgr, Diagnostics, OutputBackend));
+  llvm::errs() << "[setUpASTContextIfNeeded] ASTContext created successfully\n";
   if (!Invocation.getFrontendOptions().ModuleAliasMap.empty())
     Context->setModuleAliases(Invocation.getFrontendOptions().ModuleAliasMap);
 
@@ -352,17 +357,28 @@ bool CompilerInstance::setUpASTContextIfNeeded() {
   }
 
   registerIRGenSILTransforms(*Context);
+  llvm::errs() << "[setUpASTContextIfNeeded] Request functions registered\n";
 
   if (Invocation.getFrontendOptions().RequestedAction ==
         FrontendOptions::ActionType::MergeModules ||
       Invocation.getLangOptions().DebuggerSupport)
     Invocation.getLangOptions().EnableDeserializationSafety = false;
 
-  if (setUpModuleLoaders())
+  llvm::errs() << "[setUpASTContextIfNeeded] About to setup module loaders\n";
+  if (setUpModuleLoaders()) {
+    llvm::errs() << "[setUpASTContextIfNeeded] Module loaders setup failed\n";
     return true;
-  if (setUpPluginLoader())
+  }
+  llvm::errs() << "[setUpASTContextIfNeeded] Module loaders setup completed\n";
+  
+  llvm::errs() << "[setUpASTContextIfNeeded] About to setup plugin loader\n";
+  if (setUpPluginLoader()) {
+    llvm::errs() << "[setUpASTContextIfNeeded] Plugin loader setup failed\n";
     return true;
+  }
+  llvm::errs() << "[setUpASTContextIfNeeded] Plugin loader setup completed\n";
 
+  llvm::errs() << "[setUpASTContextIfNeeded] ASTContext setup completed successfully\n";
   return false;
 }
 
@@ -548,50 +564,67 @@ void CompilerInstance::setupCachingDiagnosticsProcessorIfNeeded() {
 
 bool CompilerInstance::setup(const CompilerInvocation &Invoke,
                              std::string &Error, ArrayRef<const char *> Args) {
+  llvm::errs() << "[CompilerInstance::setup] Starting CompilerInstance setup\n";
   Invocation = Invoke;
 
   if (setupCASIfNeeded(Args)) {
     Error = "Setting up CAS failed";
+    llvm::errs() << "[CompilerInstance::setup] CAS setup failed\n";
     return true;
   }
+  llvm::errs() << "[CompilerInstance::setup] CAS setup completed\n";
 
   setupDependencyTrackerIfNeeded();
+  llvm::errs() << "[CompilerInstance::setup] Dependency tracker setup completed\n";
   setupOutputBackend();
+  llvm::errs() << "[CompilerInstance::setup] Output backend setup completed\n";
 
   // If initializing the overlay file system fails there's no sense in
   // continuing because the compiler will read the wrong files.
   if (setUpVirtualFileSystemOverlays()) {
     Error = "Setting up virtual file system overlays failed";
+    llvm::errs() << "[CompilerInstance::setup] Virtual file system overlays setup failed\n";
     return true;
   }
+  llvm::errs() << "[CompilerInstance::setup] Virtual file system overlays setup completed\n";
   
   setUpLLVMArguments();
+  llvm::errs() << "[CompilerInstance::setup] LLVM arguments setup completed\n";
   setUpDiagnosticOptions();
+  llvm::errs() << "[CompilerInstance::setup] Diagnostic options setup completed\n";
 
   assert(Lexer::isIdentifier(Invocation.getModuleName()));
 
   if (setUpInputs()) {
     Error = "Setting up inputs failed";
+    llvm::errs() << "[CompilerInstance::setup] Input setup failed\n";
     return true;
   }
+  llvm::errs() << "[CompilerInstance::setup] Input setup completed\n";
 
   if (setUpASTContextIfNeeded()) {
     Error = "Setting up ASTContext failed";
+    llvm::errs() << "[CompilerInstance::setup] ASTContext setup failed\n";
     return true;
   }
+  llvm::errs() << "[CompilerInstance::setup] ASTContext setup completed\n";
 
   if (hasASTContext()) {
     setupStatsReporter();
+    llvm::errs() << "[CompilerInstance::setup] Stats reporter setup completed\n";
   }
 
   if (setupDiagnosticVerifierIfNeeded()) {
     Error = "Setting up diagnostics verifier failed";
+    llvm::errs() << "[CompilerInstance::setup] Diagnostic verifier setup failed\n";
     return true;
   }
+  llvm::errs() << "[CompilerInstance::setup] Diagnostic verifier setup completed\n";
 
   // Setup caching diagnostics processor. It should be setup after all other
   // DiagConsumers are added.
   setupCachingDiagnosticsProcessorIfNeeded();
+  llvm::errs() << "[CompilerInstance::setup] Caching diagnostics processor setup completed\n";
 
   // Dump module search paths if -Rmodule-loading is on.
   const auto &LangOpts = Invocation.getLangOptions();
@@ -608,11 +641,15 @@ bool CompilerInstance::setup(const CompilerInvocation &Invoke,
   // trigger a bunch of other errors due to the stdlib being missing, or at
   // worst crash downstream as many call sites don't currently handle a missing
   // stdlib.
+  llvm::errs() << "[CompilerInstance::setup] About to load Swift standard library\n";
   if (loadStdlibIfNeeded()) {
     Error = "Loading the standard library failed";
+    llvm::errs() << "[CompilerInstance::setup] Swift standard library loading failed\n";
     return true;
   }
+  llvm::errs() << "[CompilerInstance::setup] Swift standard library loading completed successfully\n";
 
+  llvm::errs() << "[CompilerInstance::setup] CompilerInstance setup completed successfully\n";
   return false;
 }
 
@@ -1638,33 +1675,50 @@ void CompilerInstance::performSema() {
 }
 
 bool CompilerInstance::loadStdlibIfNeeded() {
+  llvm::errs() << "[loadStdlibIfNeeded] Starting Swift standard library loading check\n";
+  
   if (!FrontendOptions::doesActionRequireSwiftStandardLibrary(
           Invocation.getFrontendOptions().RequestedAction)) {
+    llvm::errs() << "[loadStdlibIfNeeded] Action does not require Swift standard library, skipping\n";
     return false;
   }
+  llvm::errs() << "[loadStdlibIfNeeded] Action requires Swift standard library\n";
+  
   // If we aren't expecting an implicit stdlib import, there's nothing to do.
   if (getImplicitImportInfo().StdlibKind != ImplicitStdlibKind::Stdlib) {
+    llvm::errs() << "[loadStdlibIfNeeded] Not expecting implicit stdlib import, skipping\n";
     return false;
   }
+  llvm::errs() << "[loadStdlibIfNeeded] Expecting implicit stdlib import\n";
 
   FrontendStatsTracer tracer(getStatsReporter(), "load-stdlib");
+  llvm::errs() << "[loadStdlibIfNeeded] About to call Context->getStdlibModule(loadIfAbsent=true)\n";
   ModuleDecl *M = Context->getStdlibModule(/*loadIfAbsent*/ true);
 
   if (!M) {
+    llvm::errs() << "[loadStdlibIfNeeded] ERROR: getStdlibModule returned nullptr\n";
     Diagnostics.diagnose(SourceLoc(), diag::error_stdlib_not_found,
                          Invocation.getTargetTriple());
     return true;
   }
+  llvm::errs() << "[loadStdlibIfNeeded] getStdlibModule returned module: " << M->getName() << "\n";
 
+  llvm::errs() << "[loadStdlibIfNeeded] About to verify implicit concurrency import\n";
   verifyImplicitConcurrencyImport();
+  llvm::errs() << "[loadStdlibIfNeeded] Implicit concurrency import verification completed\n";
+  
+  llvm::errs() << "[loadStdlibIfNeeded] About to verify implicit string processing import\n";
   verifyImplicitStringProcessingImport();
+  llvm::errs() << "[loadStdlibIfNeeded] Implicit string processing import verification completed\n";
 
   // If we failed to load, we should have already diagnosed.
   if (M->failedToLoad()) {
+    llvm::errs() << "[loadStdlibIfNeeded] ERROR: stdlib module failed to load\n";
     assert(Diagnostics.hadAnyError() &&
            "stdlib module failed to load but nothing was diagnosed?");
     return true;
   }
+  llvm::errs() << "[loadStdlibIfNeeded] Swift standard library loaded successfully\n";
   return false;
 }
 

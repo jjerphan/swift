@@ -2107,7 +2107,13 @@ void ASTContext::addCleanup(std::function<void(void)> cleanup) {
 }
 
 bool ASTContext::hadError() const {
-  return Diags.hadAnyError() || hasDelayedConformanceErrors();
+  bool diagsError = Diags.hadAnyError();
+  bool delayedConf = hasDelayedConformanceErrors();
+  if (diagsError || delayedConf) {
+    llvm::errs() << "[ASTContext::hadError] diagsError=" << diagsError
+                 << ", delayedConf=" << delayedConf << "\n";
+  }
+  return diagsError || delayedConf;
 }
 
 /// Retrieve the arena from which we should allocate storage for a type.

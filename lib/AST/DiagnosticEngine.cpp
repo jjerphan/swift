@@ -1343,8 +1343,10 @@ void DiagnosticState::updateFor(DiagnosticBehavior behavior) {
   if (behavior == DiagnosticBehavior::Fatal) {
     fatalErrorOccurred = true;
     anyErrorOccurred = true;
+    llvm::errs() << "[DiagnosticEngine] anyErrorOccurred set (Fatal)\n";
   } else if (behavior == DiagnosticBehavior::Error) {
     anyErrorOccurred = true;
+    llvm::errs() << "[DiagnosticEngine] anyErrorOccurred set (Error)\n";
   }
 
   ASSERT((!AssertOnError || !anyErrorOccurred) && "We emitted an error?!");
@@ -1397,6 +1399,8 @@ DiagnosticEngine::diagnosticInfoForDiagnostic(const Diagnostic &diagnostic,
                                               bool includeDiagnosticName) {
   auto behavior = state.determineBehavior(diagnostic);
   state.updateFor(behavior);
+  llvm::errs() << "[DiagnosticEngine] diag id=" << (unsigned)diagnostic.getID()
+               << " behavior=" << (int)behavior << "\n";
 
   if (behavior == DiagnosticBehavior::Ignore)
     return std::nullopt;
@@ -1567,6 +1571,19 @@ DiagnosticEngine::getGeneratedSourceBufferNotes(SourceLoc loc) {
 }
 
 void DiagnosticEngine::emitDiagnostic(const Diagnostic &diagnostic) {
+  // Trace emitted diagnostics with human-readable text
+  if (auto info =
+          diagnosticInfoForDiagnostic(diagnostic,
+                                      /* includeDiagnosticName= */ true)) {
+    std::string formatted;
+    llvm::raw_string_ostream os(formatted);
+    DiagnosticEngine::formatDiagnosticText(os, info->FormatString,
+                                           diagnostic.getArgs(),
+                                           DiagnosticFormatOptions());
+    os.flush();
+    llvm::errs() << "[emitDiagnostic] id=" << (unsigned)diagnostic.getID()
+                 << " text=\"" << formatted << "\"\n";
+  }
 
   ArrayRef<Diagnostic> childNotes = diagnostic.getChildNotes();
   std::vector<Diagnostic> extendedChildNotes;

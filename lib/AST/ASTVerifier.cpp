@@ -3982,7 +3982,9 @@ void swift::verify(SourceFile &SF) {
     llvm::errs() << "[swift::verify(SourceFile)] SourceFile details:\n";
     llvm::errs() << "[swift::verify(SourceFile)]   - Module: " << SF.getParentModule()->getName().str() << "\n";
     llvm::errs() << "[swift::verify(SourceFile)]   - AST stage: " << (int)SF.ASTStage << "\n";
-    llvm::errs() << "[swift::verify(SourceFile)]   - Top-level decls count: " << SF.getTopLevelDecls().size() << "\n";
+    // Avoid calling getTopLevelDecls() here as it triggers ParseTopLevelDeclsRequest
+    // which creates a circular dependency during verification
+    llvm::errs() << "[swift::verify(SourceFile)]   - Top-level decls count: [skipped to avoid cycle]\n";
     llvm::errs() << "[swift::verify(SourceFile)]   - ASTContext had error: " << SF.getASTContext().hadError() << "\n";
   }
   

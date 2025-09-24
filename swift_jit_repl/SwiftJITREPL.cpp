@@ -1,4 +1,6 @@
 #include "SwiftJITREPL.h"
+// Evaluator debugging APIs are not exposed; cycle dumps are enabled via LangOptions
+#include "swift/Frontend/PrintingDiagnosticConsumer.h"
 
 // Swift runtime path macros (these should be defined by the build system)
 #ifndef SWIFT_RUNTIME_LIBRARY_PATHS
@@ -313,10 +315,10 @@ private:
     std::string transformForValuePrinting(const std::string& code) {
         llvm::errs() << "[transformForValuePrinting] Input code: '" << code << "'\n";
         
-        // Leave the code unchanged - no transformation needed
-        std::string result = code;
+        // Add Swift import to make standard library operators available
+        std::string result = "import Swift\n" + code;
         
-        llvm::errs() << "[transformForValuePrinting] Generated Swift code (unchanged):\n" << result << "\n";
+        llvm::errs() << "[transformForValuePrinting] Generated Swift code:\n" << result << "\n";
         return result;
     }
 };
@@ -660,9 +662,11 @@ bool SwiftJITREPL::isAvailable() {
         
         // Set up frontend options for SIL generation (to generate SIL functions)
         invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
+        // Enable cycle dumps for early availability check as well
+        invocation.getLangOptions().DebugDumpCycles = true;
         
         // Set up command line arguments for immediate mode
-        std::vector<std::string> immediateArgs = {"swift", "-i"};
+        std::vector<std::string> immediateArgs = {"swift", "-i", "-Xfrontend", "-debug-cycles"};
         invocation.getFrontendOptions().ImmediateArgv = immediateArgs;
         
         // Set a valid module name (required for CompilerInstance::setup)
@@ -732,30 +736,19 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     // when we call performSema() - no need to manually add it here
     llvm::errs() << "[SwiftIncrementalParser] Swift standard library will be imported automatically\n";
     
-    // Add imports for all previous modules to enable state reuse
-    for (auto prevModule : *modules) {
-        if (prevModule) {
-            importInfo.AdditionalImports.push_back(swift::ImportedModule(prevModule));
-            llvm::errs() << "[SwiftIncrementalParser] Added import for module: " << prevModule->getName() << "\n";
-        }
-    }
+    // Do not auto-import previous evaluation modules to avoid circular references
+    // State reuse across evaluations will be handled via shared ASTContext, not imports
     
     llvm::errs() << "[SwiftIncrementalParser] About to call ModuleDecl::create...\n";
-    
     auto newModule = swift::ModuleDecl::createMainModule(
         *sharedASTContext,
         sharedASTContext->getIdentifier(moduleName),
         importInfo,
         [&](swift::ModuleDecl* module, auto addFile) {
-            llvm::errs() << "[SwiftIncrementalParser] Inside module creation lambda...\n";
-            
             // Create a MemoryBuffer for this expression
             std::ostringstream sourceName;
             sourceName << "swift_repl_input_" << InputCount++;
-            
             llvm::errs() << "[SwiftIncrementalParser] Source name: " << sourceName.str() << "\n";
-            
-            // Create a MemoryBuffer for the Swift code
             llvm::errs() << "[SwiftIncrementalParser] Creating MemoryBuffer...\n";
             llvm::errs() << "[SwiftIncrementalParser] Input content: '" << Input.str() << "'\n";
             llvm::errs() << "[SwiftIncrementalParser] Input length: " << Input.size() << "\n";
@@ -765,43 +758,15 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
             llvm::errs() << "[SwiftIncrementalParser] Buffer content: '" << inputBuffer->getBuffer() << "'\n";
             
             // Add the source buffer to the shared ASTContext's SourceManager
-            llvm::errs() << "[SwiftIncrementalParser] Adding source buffer to SourceManager...\n";
-            
-            // Test that sharedASTContext is properly set before using it
-            if (!sharedASTContext) {
-                llvm::errs() << "[SwiftIncrementalParser] ERROR: sharedASTContext is null!\n";
-                return;
-            }
-            
-            // Test that the SourceManager is accessible
-            unsigned bufferID;
-            try {
-                llvm::errs() << "[SwiftIncrementalParser] Testing SourceManager access...\n";
-                auto& sourceMgr = sharedASTContext->SourceMgr;
-                llvm::errs() << "[SwiftIncrementalParser] SourceManager accessed successfully\n";
-                
-                // Test that we can get the number of source buffers before adding
-                llvm::errs() << "[SwiftIncrementalParser] Current source buffer count: " << sourceMgr.getLLVMSourceMgr().getNumBuffers() << "\n";
-                
-                bufferID = sourceMgr.addNewSourceBuffer(std::move(inputBuffer));
-                llvm::errs() << "[SwiftIncrementalParser] Added source buffer with ID: " << bufferID << "\n";
-                
-                // Verify the buffer was added successfully
-                llvm::errs() << "[SwiftIncrementalParser] New source buffer count: " << sourceMgr.getLLVMSourceMgr().getNumBuffers() << "\n";
-                
-            } catch (const std::exception& e) {
-                llvm::errs() << "[SwiftIncrementalParser] ERROR: Exception when accessing SourceManager: " << e.what() << "\n";
-                return;
-            } catch (...) {
-                llvm::errs() << "[SwiftIncrementalParser] ERROR: Unknown exception when accessing SourceManager\n";
-                return;
-            }
+            auto &sourceMgr = sharedASTContext->SourceMgr;
+            unsigned bufferID = sourceMgr.addNewSourceBuffer(std::move(inputBuffer));
+            llvm::errs() << "[SwiftIncrementalParser] Added source buffer with ID: " << bufferID << "\n";
             
             // Add source file to the new module
             llvm::errs() << "[SwiftIncrementalParser] Creating SourceFile...\n";
             addFile(new (*sharedASTContext) swift::SourceFile(
-                *module, 
-                swift::SourceFileKind::Library,  // Use Library to avoid "multiple main files" error
+                *module,
+                swift::SourceFileKind::Main,
                 bufferID,
                 swift::SourceFile::getDefaultParsingOptions(sharedASTContext->LangOpts)
             ));
@@ -830,7 +795,16 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     // Use the passed compilerInvocation but update module-specific settings
     swift::CompilerInvocation invocation = *compilerInvocation;
     invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
+    // Enable request-evaluator cycle dumps to diagnose circular reference root cause
+    invocation.getLangOptions().DebugDumpCycles = true;
     invocation.getFrontendOptions().ModuleName = moduleName;
+    // Also pass -debug-cycles through ImmediateArgv so frontend plumbing dumps cycles
+    {
+        auto argv = invocation.getFrontendOptions().ImmediateArgv;
+        argv.push_back("-Xfrontend");
+        argv.push_back("-debug-cycles");
+        invocation.getFrontendOptions().ImmediateArgv = argv;
+    }
     
     // Add detailed logging for CompilerInstance setup
     llvm::errs() << "[SwiftIncrementalParser] About to setup CompilerInstance with invocation\n";
@@ -862,6 +836,11 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     // Log the ASTContext state
     llvm::errs() << "[SwiftIncrementalParser] ASTContext had error before performSema: " << sharedASTContext->hadError() << "\n";
     llvm::errs() << "[SwiftIncrementalParser] ASTContext Diags had error before performSema: " << sharedASTContext->Diags.hadAnyError() << "\n";
+    
+    // Add diagnostic consumer BEFORE performSema to capture errors
+    swift::PrintingDiagnosticConsumer printDiags;
+    tempCI->getDiags().addConsumer(printDiags);
+    llvm::errs() << "[SwiftIncrementalParser] Added diagnostic consumer to capture errors\n";
     
     // Log search paths
     auto &searchPaths2 = invocation.getSearchPathOptions();
@@ -896,6 +875,7 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     
     llvm::errs() << "[SwiftIncrementalParser] AST had error: " << astHadError << "\n";
     llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << diagsHadError << "\n";
+    // Note: Evaluator stack dump API not available here; rely on Diagnostics text
     
     // Log detailed state after performSema
     llvm::errs() << "[SwiftIncrementalParser] After performSema - Module state:\n";
@@ -953,6 +933,14 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
         llvm::errs() << "[SwiftIncrementalParser] Attempting to print diagnostic information...\n";
         auto& diagEngine = tempCI->getDiags();
         llvm::errs() << "[SwiftIncrementalParser] Diagnostic engine available\n";
+        
+        // Force the diagnostic engine to flush any pending messages
+        llvm::errs() << "[SwiftIncrementalParser] Forcing diagnostic flush...\n";
+        diagEngine.flushConsumers();
+        
+        // Try to get more detailed error information
+        llvm::errs() << "[SwiftIncrementalParser] Had any error: " << diagEngine.hadAnyError() << "\n";
+        llvm::errs() << "[SwiftIncrementalParser] Has fatal error: " << diagEngine.hasFatalErrorOccurred() << "\n";
         
         // Print module state for debugging
         llvm::SmallVector<swift::Decl*, 32> topLevelDecls;
@@ -1288,21 +1276,8 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     // when we call performSema() or other Swift compiler functions
     llvm::errs() << "[SwiftInterpreter] Swift standard library will be loaded automatically by CompilerInstance\n";
     
-    // Create base module - Swift standard library will be imported automatically
-    swift::ImplicitImportInfo baseImportInfo;
-    
-    auto baseModule = swift::ModuleDecl::createMainModule(
-        *sharedASTContext,
-        sharedASTContext->getIdentifier("SwiftJITREPL_Base"),
-        baseImportInfo,
-        [](swift::ModuleDecl*, auto) {} // Empty initial module
-    );
-    
-    // Register base module with shared ASTContext
-    sharedASTContext->addLoadedModule(baseModule);
-    modules.push_back(baseModule);
-    
-    llvm::errs() << "[SwiftInterpreter] Base module created and registered\n";
+    // Skip creating/importing a base module to avoid accidental cycles
+    llvm::errs() << "[SwiftInterpreter] Skipping creation of SwiftJITREPL_Base to avoid import cycles\n";
     
     // Create incremental parser with shared ASTContext and modules
     IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), compilerInstance.get(), compilerInvocation);

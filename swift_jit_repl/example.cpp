@@ -29,6 +29,7 @@ int main() {
     
     // Test expressions - all in one evaluation to test single-module approach
     std::vector<std::string> expressions = {
+        "42",
         "5 + 10"
     };
     

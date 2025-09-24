@@ -89,6 +89,17 @@ void Evaluator::finishedRequest(const ActiveRequest &request) {
 }
 
 void Evaluator::diagnoseCycle(const ActiveRequest &request) {
+  // Temporary debug: Always print active request names when cycle is detected
+  llvm::errs() << "[Evaluator::diagnoseCycle] CYCLE DETECTED - Active requests:\n";
+  for (const auto &step : activeRequests) {
+    llvm::errs() << "  - ";
+    simple_display(llvm::errs(), step);
+    llvm::errs() << "\n";
+  }
+  llvm::errs() << "  -> ";
+  simple_display(llvm::errs(), request);
+  llvm::errs() << " (cyclic dependency)\n";
+
   if (debugDumpCycles) {
     const auto printIndent = [](llvm::raw_ostream &OS, unsigned indent) {
       OS.indent(indent);

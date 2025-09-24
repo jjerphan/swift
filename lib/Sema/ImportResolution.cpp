@@ -291,6 +291,10 @@ void swift::performImportResolution(ModuleDecl *M) {
   // Check for errors after processing all files
   llvm::errs() << "[swift::performImportResolution] Checking for errors after processing all files...\n";
   bool astHadError = M->getASTContext().hadError();
+  if (astHadError) {
+    llvm::errs() << "[ImportResolution] ASTContext had error before resolving imports for module: "
+                 << M->getName() << "\n";
+  }
   bool diagsHadError = M->getASTContext().Diags.hadAnyError();
   llvm::errs() << "[swift::performImportResolution] AST had error: " << astHadError << "\n";
   llvm::errs() << "[swift::performImportResolution] Diagnostics had error: " << diagsHadError << "\n";
@@ -356,6 +360,10 @@ void swift::performImportResolution(SourceFile &SF) {
   // Check for errors after import resolution
   llvm::errs() << "[swift::performImportResolution(SourceFile)] Checking for errors after import resolution...\n";
   bool astHadError = SF.getASTContext().hadError();
+  if (astHadError) {
+    llvm::errs() << "[ImportResolution] ASTContext had error before resolving imports for SourceFile: "
+                 << SF.getFilename() << "\n";
+  }
   bool diagsHadError = SF.getASTContext().Diags.hadAnyError();
   llvm::errs() << "[swift::performImportResolution(SourceFile)] AST had error: " << astHadError << "\n";
   llvm::errs() << "[swift::performImportResolution(SourceFile)] Diagnostics had error: " << diagsHadError << "\n";
@@ -395,6 +403,9 @@ void swift::performImportResolutionForClangMacroBuffer(
 void ImportResolver::visitImportDecl(ImportDecl *ID) {
   assert(unboundImports.empty());
 
+  // Debug: log user-written import declaration encountered
+  llvm::errs() << "[ImportResolution] visitImportDecl\n";
+
   unboundImports.emplace_back(ID);
   bindPendingImports();
 }
@@ -407,7 +418,13 @@ void ImportResolver::bindPendingImports() {
 void ImportResolver::bindImport(UnboundImport &&I) {
   auto ID = I.getImportDecl();
 
+  // Debug: start binding import for this source file
+  llvm::errs() << "[ImportResolution] bindImport in SF="
+               << SF.getFilename() << " parentModule="
+               << SF.getParentModule()->getName() << "\n";
+
   if (!I.checkNotTautological(SF)) {
+    llvm::errs() << "[ImportResolution] Skipping tautological (self) import\n";
     // No need to process this import further.
     if (ID)
       ID.get()->setModule(SF.getParentModule());
@@ -415,6 +432,8 @@ void ImportResolver::bindImport(UnboundImport &&I) {
   }
 
   ModuleDecl *M = getModule(I.import.module.getModulePath());
+  llvm::errs() << "[ImportResolution] getModule -> "
+               << (M ? M->getName().str() : std::string("<null>")) << "\n";
   if (!I.checkModuleLoaded(M, SF)) {
     // Can't process further. checkModuleLoaded() will have diagnosed this.
     if (ID)
@@ -432,6 +451,12 @@ void ImportResolver::bindImport(UnboundImport &&I) {
   }
 
   auto topLevelModule = I.getTopLevelModule(M, SF);
+  if (auto *TLM = topLevelModule.getPtrOrNull()) {
+    llvm::errs() << "[ImportResolution] topLevelModule -> " << TLM->getName()
+                 << "\n";
+  } else {
+    llvm::errs() << "[ImportResolution] topLevelModule -> <null>\n";
+  }
 
   I.validateOptions(topLevelModule, SF);
 

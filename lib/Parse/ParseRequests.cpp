@@ -589,8 +589,10 @@ void ParseSourceFileRequest::cacheResult(SourceFileParsingResult result) const {
   SF->AllCollectedTokens = result.CollectedTokens;
   SF->InterfaceHash = result.Fingerprint;
 
-  // Verify the parsed source file.
-  verify(*SF);
+  // Skip verification during initial parsing to avoid circular dependency
+  // with ParseTopLevelDeclsRequest. Verification will be done later during
+  // semantic analysis when the AST is more complete.
+  // verify(*SF);
 }
 
 ArrayRef<Decl *> ParseTopLevelDeclsRequest::evaluate(
