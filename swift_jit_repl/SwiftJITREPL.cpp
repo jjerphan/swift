@@ -264,6 +264,10 @@ static std::unique_ptr<llvm::Module> lowerSwiftCodeToLLVMModule(swift::ModuleDec
         Produced->print(os, nullptr);
     }
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] IR text serialized, size: " << irText.size() << " bytes\n";
+    llvm::errs() << "[lowerSwiftCodeToLLVMModule] Generated LLVM IR:\n";
+    llvm::errs() << "=== LLVM IR START ===\n";
+    llvm::errs() << irText;
+    llvm::errs() << "=== LLVM IR END ===\n";
 
     // Parse back into our shared context
     llvm::errs() << "[lowerSwiftCodeToLLVMModule] Parsing IR text back into shared LLVM context...\n";
