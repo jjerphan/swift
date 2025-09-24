@@ -251,30 +251,47 @@ class Verifier : public ASTWalker {
         Ctx(isa<ModuleDecl *>(M) ? cast<ModuleDecl *>(M)->getASTContext()
                                  : cast<SourceFile *>(M)->getASTContext()),
         Out(llvm::errs()), HadError(Ctx.hadError()) {
-    llvm::errs() << "[Verifier::Verifier] Creating Verifier for SourceFile\n";
-    llvm::errs() << "[Verifier::Verifier] ASTContext had error: " << HadError << "\n";
+    // Only log for our specific test case
+    if (auto *SF = M.dyn_cast<SourceFile *>()) {
+      if (SF->getFilename().contains("swift_repl_input")) {
+        llvm::errs() << "[Verifier::Verifier] Creating Verifier for SourceFile\n";
+        llvm::errs() << "[Verifier::Verifier] ASTContext had error: " << HadError << "\n";
+      }
+    }
     pushScope(DC);
-    llvm::errs() << "[Verifier::Verifier] Initial scope pushed\n";
+    if (auto *SF = M.dyn_cast<SourceFile *>()) {
+      if (SF->getFilename().contains("swift_repl_input")) {
+        llvm::errs() << "[Verifier::Verifier] Initial scope pushed\n";
+      }
+    }
   }
 
   /// Emit an error message and abort, optionally dumping the expression.
   /// \param E if non-null, the expression to dump() followed by a new-line.
   void error(llvm::StringRef msg, Expr *E = nullptr) {
-    llvm::errs() << "[Verifier::error] AST verification error: " << msg << "\n";
-    llvm::errs() << "[Verifier::error] Error context:\n";
-    llvm::errs() << "[Verifier::error]   - Module: " << getModuleContext()->getName().str() << "\n";
-    llvm::errs() << "[Verifier::error]   - ASTContext had error: " << Ctx.hadError() << "\n";
+    // Only log for our specific test case
+    if (auto *SF = M.dyn_cast<SourceFile *>()) {
+      if (SF->getFilename().contains("swift_repl_input")) {
+        llvm::errs() << "[Verifier::error] AST verification error: " << msg << "\n";
+        llvm::errs() << "[Verifier::error] Error context:\n";
+        llvm::errs() << "[Verifier::error]   - Module: " << getModuleContext()->getName().str() << "\n";
+        llvm::errs() << "[Verifier::error]   - ASTContext had error: " << Ctx.hadError() << "\n";
+        
+        if (E) {
+          llvm::errs() << "[Verifier::error] Dumping expression:\n";
+          llvm::errs() << "[Verifier::error] Expression kind: " << swift::Expr::getKindName(E->getKind()) << "\n";
+          llvm::errs() << "[Verifier::error] Expression type: ";
+          if (E->getType()) {
+            llvm::errs() << E->getType().getString() << "\n";
+          } else {
+            llvm::errs() << "NULL\n";
+          }
+        }
+      }
+    }
     
     Out << msg << "\n";
     if (E) {
-      llvm::errs() << "[Verifier::error] Dumping expression:\n";
-      llvm::errs() << "[Verifier::error] Expression kind: " << swift::Expr::getKindName(E->getKind()) << "\n";
-      llvm::errs() << "[Verifier::error] Expression type: ";
-      if (E->getType()) {
-        llvm::errs() << E->getType().getString() << "\n";
-      } else {
-        llvm::errs() << "NULL\n";
-      }
       E->dump(Out);
       Out << "\n";
     }
@@ -3970,27 +3987,16 @@ void swift::verify(SourceFile &SF) {
   }
   
   if (!shouldVerifyGivenContext(SF.getASTContext())) {
-    llvm::errs() << "[swift::verify(SourceFile)] Verification skipped due to context check\n";
     return;
   }
   
-  llvm::errs() << "[swift::verify(SourceFile)] Creating Verifier\n";
   Verifier verifier(SF, &SF);
-  
-  llvm::errs() << "[swift::verify(SourceFile)] Walking AST with verifier\n";
   SF.walk(verifier);
-  llvm::errs() << "[swift::verify(SourceFile)] AST walk completed\n";
 
   // Verify the AvailabilityScope hierarchy.
   if (auto scope = SF.getAvailabilityScope()) {
-    llvm::errs() << "[swift::verify(SourceFile)] Verifying AvailabilityScope\n";
     scope->verify(SF.getASTContext());
-    llvm::errs() << "[swift::verify(SourceFile)] AvailabilityScope verification completed\n";
-  } else {
-    llvm::errs() << "[swift::verify(SourceFile)] No AvailabilityScope to verify\n";
   }
-  
-  llvm::errs() << "[swift::verify(SourceFile)] Verification completed for: " << SF.getFilename() << "\n";
 }
 
 bool swift::shouldVerify(const Decl *D, const ASTContext &Context) {

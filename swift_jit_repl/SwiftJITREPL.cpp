@@ -480,10 +480,10 @@ public:
                 return EvaluationResult("Interpreter not initialized");
             }
             
-            llvm::errs() << "[SwiftJITREPL::evaluate] About to call ParseAndExecute...\n";
-            // Use ParseAndExecute to handle the compilation and execution
-            auto error = interpreter->ParseAndExecute(expression);
-            llvm::errs() << "[SwiftJITREPL::evaluate] ParseAndExecute completed\n";
+            llvm::errs() << "[SwiftJITREPL::evaluate] About to call parseAndExecute...\n";
+            // Use parseAndExecute to handle the compilation and execution
+            auto error = interpreter->parseAndExecute(expression);
+            llvm::errs() << "[SwiftJITREPL::evaluate] parseAndExecute completed\n";
             if (error) {
                 lastError = "Failed to execute: " + llvm::toString(std::move(error));
                 stats.total_expressions++;
@@ -589,16 +589,16 @@ EvaluationResult SwiftJITREPL::evaluate(const std::string& expression) {
     return pImpl->evaluate(expression);
 }
 
-llvm::Expected<SwiftPartialTranslationUnit&> SwiftJITREPL::Parse(const std::string& code) {
+llvm::Expected<SwiftPartialTranslationUnit&> SwiftJITREPL::parse(const std::string& code) {
     if (!pImpl->interpreter) {
         return llvm::createStringError(llvm::inconvertibleErrorCode(), 
                                      "Interpreter not initialized");
     }
     
-    return pImpl->interpreter->getIncrementalParser()->Parse(code);
+    return pImpl->interpreter->getIncrementalParser()->parse(code);
 }
 
-llvm::Error SwiftJITREPL::Execute(SwiftPartialTranslationUnit& ptu) {
+llvm::Error SwiftJITREPL::execute(SwiftPartialTranslationUnit& ptu) {
     if (!pImpl->interpreter) {
         return llvm::createStringError(llvm::inconvertibleErrorCode(), 
                                      "Interpreter not initialized");
@@ -607,22 +607,22 @@ llvm::Error SwiftJITREPL::Execute(SwiftPartialTranslationUnit& ptu) {
     return pImpl->interpreter->getIncrementalExecutor()->addModule(ptu);
 }
 
-llvm::Error SwiftJITREPL::ParseAndExecute(const std::string& code) {
+llvm::Error SwiftJITREPL::parseAndExecute(const std::string& code) {
     if (!pImpl->interpreter) {
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "Interpreter not initialized");
     }
     
-    return pImpl->interpreter->ParseAndExecute(code);
+    return pImpl->interpreter->parseAndExecute(code);
 }
 
-llvm::Error SwiftJITREPL::Undo(unsigned N) {
+llvm::Error SwiftJITREPL::undo(unsigned N) {
     if (!pImpl->interpreter) {
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "Interpreter not initialized");
     }
     
-    return pImpl->interpreter->Undo(N);
+    return pImpl->interpreter->undo(N);
 }
 
 std::vector<EvaluationResult> SwiftJITREPL::evaluateMultiple(const std::vector<std::string>& expressions) {
@@ -645,7 +645,7 @@ SwiftJITREPL::CompilationStats SwiftJITREPL::getStats() const {
     return pImpl->getStats();
 }
 
-bool SwiftJITREPL::isSwiftJITAvailable() {
+bool SwiftJITREPL::isAvailable() {
     // Check if Swift JIT is available by attempting to create a minimal instance
     try {
         // Initialize LLVM targets FIRST before any CompilerInstance operations (only once)
@@ -698,14 +698,6 @@ bool SwiftJITREPL::isSwiftJITAvailable() {
     }
 }
 
-EvaluationResult evaluateSwiftExpression(const std::string& expression, const REPLConfig& config) {
-    SwiftJITREPL repl(config);
-    return repl.evaluate(expression);
-}
-
-bool isSwiftJITAvailable() {
-    return SwiftJITREPL::isSwiftJITAvailable();
-}
 
 // ============================================================================
 // SwiftIncrementalParser Implementation
@@ -722,11 +714,11 @@ SwiftIncrementalParser::SwiftIncrementalParser(swift::ASTContext* sharedASTConte
 SwiftIncrementalParser::~SwiftIncrementalParser() {
     // Clean up all PTUs
     for (auto& ptu : PTUs) {
-        CleanUpPTU(ptu);
+        cleanUpPTU(ptu);
     }
 }
 
-llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm::StringRef Input) {
+llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm::StringRef Input) {
     llvm::errs() << "[SwiftIncrementalParser] Parse called with input: " << Input << "\n";
     
     // Create new ModuleDecl for this evaluation
@@ -1020,7 +1012,7 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::Parse(llvm:
     return ptu;
 }
 
-void SwiftIncrementalParser::CleanUpPTU(SwiftPartialTranslationUnit& PTU) {
+void SwiftIncrementalParser::cleanUpPTU(SwiftPartialTranslationUnit& PTU) {
     // Clean up the LLVM module
     PTU.TheModule.reset();
     PTU.ModulePart = nullptr;  // ModuleDecl is owned by ASTContext
@@ -1345,7 +1337,7 @@ size_t SwiftInterpreter::getEffectivePTUSize() const {
     return PTUs.size() - InitPTUSize;
 }
 
-llvm::Error SwiftInterpreter::Undo(unsigned N) {
+llvm::Error SwiftInterpreter::undo(unsigned N) {
     std::list<SwiftPartialTranslationUnit> &PTUs = IncrParser->getPTUs();
     if (N > getEffectivePTUSize())
         return llvm::make_error<llvm::StringError>("Operation failed. "
@@ -1358,13 +1350,13 @@ llvm::Error SwiftInterpreter::Undo(unsigned N) {
                 return Err;
         }
         
-        IncrParser->CleanUpPTU(PTUs.back());
+        IncrParser->cleanUpPTU(PTUs.back());
         PTUs.pop_back();
     }
     return llvm::Error::success();
 }
 
-llvm::Error SwiftInterpreter::ParseAndExecute(llvm::StringRef Code) {
+llvm::Error SwiftInterpreter::parseAndExecute(llvm::StringRef Code) {
     llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Starting execution of: " << Code << "\n";
     
     // Transform the code to wrap it in a main function
@@ -1373,7 +1365,7 @@ llvm::Error SwiftInterpreter::ParseAndExecute(llvm::StringRef Code) {
     
     // Parse the transformed code
     llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to parse transformed code...\n";
-    auto ptuOrError = IncrParser->Parse(transformedCode);
+    auto ptuOrError = IncrParser->parse(transformedCode);
     if (!ptuOrError) {
         llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Parse failed\n";
         return ptuOrError.takeError();
@@ -1383,7 +1375,7 @@ llvm::Error SwiftInterpreter::ParseAndExecute(llvm::StringRef Code) {
     auto& ptu = *ptuOrError;
     
     // Execute the PTU and handle any errors
-    if (auto err = Execute(ptu)) {
+    if (auto err = execute(ptu)) {
         llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Execute failed: " 
                     << llvm::toString(std::move(err)) << "\n";
         return llvm::Error::success(); // Return success to avoid crash
@@ -1392,7 +1384,7 @@ llvm::Error SwiftInterpreter::ParseAndExecute(llvm::StringRef Code) {
     return llvm::Error::success();
 }
 
-llvm::Error SwiftInterpreter::Execute(SwiftPartialTranslationUnit& ptu) {
+llvm::Error SwiftInterpreter::execute(SwiftPartialTranslationUnit& ptu) {
     // Add to JIT
     llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to add module to JIT...\n";
     auto addError = IncrExecutor->addModule(ptu);

@@ -7,7 +7,7 @@ int main() {
     std::cout << "=== Swift JIT REPL Example ===\n\n";
     
     // Check if Swift JIT is available
-    if (!SwiftJITREPL::isSwiftJITAvailable()) {
+    if (!SwiftJITREPL::SwiftJITREPL::isAvailable()) {
         std::cerr << "Swift JIT not available on this system\n";
         return 1;
     }

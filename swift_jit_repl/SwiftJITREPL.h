@@ -126,13 +126,13 @@ public:
     ~SwiftIncrementalParser();
     
     // Parse incremental Swift input and return a partial translation unit
-    llvm::Expected<SwiftPartialTranslationUnit&> Parse(llvm::StringRef Input);
+    llvm::Expected<SwiftPartialTranslationUnit&> parse(llvm::StringRef Input);
     
     // Get all parsed translation units
     std::list<SwiftPartialTranslationUnit>& getPTUs() { return PTUs; }
     
     // Clean up a specific PTU
-    void CleanUpPTU(SwiftPartialTranslationUnit& PTU);
+    void cleanUpPTU(SwiftPartialTranslationUnit& PTU);
     
     // Get the shared AST context
     swift::ASTContext* getASTContext() const { return sharedASTContext; }
@@ -230,13 +230,13 @@ public:
     size_t getEffectivePTUSize() const;
     
     // Undo the last N user PTUs (runtime PTUs are not affected)
-    llvm::Error Undo(unsigned N);
+    llvm::Error undo(unsigned N);
     
     // Parse and execute Swift code
-    llvm::Error ParseAndExecute(llvm::StringRef Code);
+    llvm::Error parseAndExecute(llvm::StringRef Code);
     
     // Execute a partial translation unit
-    llvm::Error Execute(SwiftPartialTranslationUnit& PTU);
+    llvm::Error execute(SwiftPartialTranslationUnit& PTU);
     
     // Get the shared AST context
     swift::ASTContext& getASTContext();
@@ -314,34 +314,13 @@ public:
      * @return Result of the evaluation
      */
     EvaluationResult evaluate(const std::string& expression);
-    
-    /**
-     * Parse Swift code into a PartialTranslationUnit
-     * @param code The Swift code to parse
-     * @return Expected containing a reference to the parsed PTU or an error
-     */
-    llvm::Expected<SwiftPartialTranslationUnit&> Parse(const std::string& code);
-    
-    /**
-     * Execute a PartialTranslationUnit
-     * @param ptu The PTU to execute
-     * @return Error if execution failed
-     */
-    llvm::Error Execute(SwiftPartialTranslationUnit& ptu);
-    
-    /**
-     * Parse and execute Swift code
-     * @param code The Swift code to parse and execute
-     * @return Error if parsing or execution failed
-     */
-    llvm::Error ParseAndExecute(const std::string& code);
-    
+
     /**
      * Undo the last N user expressions (runtime code is not affected)
      * @param N Number of expressions to undo
      * @return Error if undo failed
      */
-    llvm::Error Undo(unsigned N);
+    llvm::Error undo(unsigned N);
     
     /**
      * Evaluate multiple Swift expressions in sequence
@@ -371,7 +350,7 @@ public:
      * Check if Swift JIT support is available
      * @return true if the system supports Swift JIT compilation
      */
-    static bool isSwiftJITAvailable();
+    static bool isAvailable();
     
     /**
      * Get compilation statistics
@@ -387,24 +366,29 @@ public:
     CompilationStats getStats() const;
 
 private:
+    /**
+     * Parse Swift code into a PartialTranslationUnit
+     * @param code The Swift code to parse
+     * @return Expected containing a reference to the parsed PTU or an error
+     */
+    llvm::Expected<SwiftPartialTranslationUnit&> parse(const std::string& code);
+    
+    /**
+     * Execute a PartialTranslationUnit
+     * @param ptu The PTU to execute
+     * @return Error if execution failed
+     */
+    llvm::Error execute(SwiftPartialTranslationUnit& ptu);
+    
+    /**
+     * Parse and execute Swift code
+     * @param code The Swift code to parse and execute
+     * @return Error if parsing or execution failed
+     */
+    llvm::Error parseAndExecute(const std::string& code);
+    
     class Impl; // PIMPL idiom for hiding implementation details
     std::unique_ptr<Impl> pImpl;
 };
-
-/**
- * Convenience function to evaluate a single Swift expression
- * Creates a temporary JIT REPL instance for one-off evaluations
- * @param expression The Swift expression to evaluate
- * @param config Optional configuration
- * @return Result of the evaluation
- */
-EvaluationResult evaluateSwiftExpression(const std::string& expression, 
-                                       const REPLConfig& config = REPLConfig{});
-
-/**
- * Convenience function to check if Swift JIT functionality is available
- * @return true if the system supports Swift JIT compilation
- */
-bool isSwiftJITAvailable();
 
 } // namespace SwiftJITREPL
