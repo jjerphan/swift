@@ -481,57 +481,12 @@ target_link_libraries(swift_jit_test PRIVATE
     ${ADDITIONAL_LIBRARIES}
 )
 
-
-# Create fibonacci executable
-add_executable(swift_jit_fibonacci
-    fibonacci.cpp
-)
-
-
-
-
-
-target_include_directories(swift_jit_fibonacci PRIVATE
-    ${SWIFT_SOURCE_DIR}/include
-    ${SWIFT_BUILD_LLVM}/include
-    ${SWIFT_BUILD_LLVM}/tools/clang/include
-    ${CLANG_SOURCE_DIR}/include
-    ${LLVM_SOURCE_DIR}/include
-    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
-)
-
-# Add LLVM C++ flags but override exception handling
-target_compile_options(swift_jit_fibonacci PRIVATE ${LLVM_CXXFLAGS})
-# Override LLVM's -fno-exceptions to allow exceptions in our code
-target_compile_options(swift_jit_fibonacci PRIVATE -fexceptions)
-# Add Swift-specific compiler definitions
-target_compile_definitions(swift_jit_fibonacci PRIVATE
-    SWIFT_TARGET_LIBRARY_NAME=swift
-    SWIFT_TARGET_LIBRARY_VERSION=1
-    __STDC_LIMIT_MACROS
-    __STDC_CONSTANT_MACROS
-)
-
-target_link_libraries(swift_jit_fibonacci PRIVATE
-    SwiftJITREPL
-    ${SWIFT_LIBRARIES}
-    ${SWIFT_RUNTIME_LIBRARIES}
-    ${CLANG_LIBRARIES}
-    ${LLVM_LIBRARIES}
-    ${LLVM_LDFLAGS}
-    ${SWIFT_SYSTEM_LIBRARIES}
-    ${ADDITIONAL_LIBRARIES}
-)
-
-
-
-
 # Set output directories
 set_target_properties(SwiftJITREPL PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
-set_target_properties(swift_jit_example swift_jit_test swift_jit_fibonacci PROPERTIES
+set_target_properties(swift_jit_example swift_jit_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
@@ -541,7 +496,7 @@ install(TARGETS SwiftJITREPL
     ARCHIVE DESTINATION lib
 )
 
-install(TARGETS swift_jit_example swift_jit_test swift_jit_fibonacci
+install(TARGETS swift_jit_example swift_jit_test
     RUNTIME DESTINATION bin
 )
 
