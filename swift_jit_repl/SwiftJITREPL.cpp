@@ -353,7 +353,7 @@ public:
     REPLConfig config;
     bool initialized = false;
     std::string lastError;
-        
+    
     // Swift compiler infrastructure
     swift::CompilerInvocation compilerInvocation;
     std::unique_ptr<SwiftInterpreter> interpreter;
@@ -502,7 +502,7 @@ public:
             
             // Update statistics
             stats.total_expressions++;
-            stats.successful_compilations++;
+                stats.successful_compilations++;
             stats.total_compilation_time_ms += duration.count() / 1000.0;
             
             // Return success (no value capture for now)
@@ -787,49 +787,37 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     
     llvm::errs() << "[SwiftIncrementalParser] New module created and registered: " << newModule->getName() << "\n";
     
-    // Perform semantic analysis on the new module
+    // Perform semantic analysis on the new module using the shared CompilerInstance
     llvm::errs() << "[SwiftIncrementalParser] Performing semantic analysis...\n";
-    
-    // Create a new CompilerInstance for this module but use the shared ASTContext
-    // This ensures the Swift standard library is available from the shared context
-    llvm::errs() << "[SwiftIncrementalParser] Creating new CompilerInstance with shared ASTContext\n";
-    
-    auto tempCI = std::make_unique<swift::CompilerInstance>();
-    
-    // Use the passed compilerInvocation but update module-specific settings
-    swift::CompilerInvocation invocation = *compilerInvocation;
-    invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
-    // Enable request-evaluator cycle dumps to diagnose circular reference root cause
-    invocation.getLangOptions().DebugDumpCycles = true;
-    invocation.getFrontendOptions().ModuleName = moduleName;
-    // Also pass -debug-cycles through ImmediateArgv so frontend plumbing dumps cycles
-    {
-        auto argv = invocation.getFrontendOptions().ImmediateArgv;
-        argv.push_back("-Xfrontend");
-        argv.push_back("-debug-cycles");
-        invocation.getFrontendOptions().ImmediateArgv = argv;
-    }
-    
-    // Add detailed logging for CompilerInstance setup
-    llvm::errs() << "[SwiftIncrementalParser] About to setup CompilerInstance with invocation\n";
-    llvm::errs() << "[SwiftIncrementalParser] Invocation module name: " << invocation.getFrontendOptions().ModuleName << "\n";
-    llvm::errs() << "[SwiftIncrementalParser] Invocation target: " << invocation.getLangOptions().Target.str() << "\n";
-    llvm::errs() << "[SwiftIncrementalParser] Invocation action: " << (int)invocation.getFrontendOptions().RequestedAction << "\n";
-    
-    std::string setupError;
-    if (tempCI->setup(invocation, setupError)) {
-        llvm::errs() << "[SwiftIncrementalParser] ERROR: Failed to setup CompilerInstance: " << setupError << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Using shared CompilerInstance and ASTContext\n";
+    auto *ci = sharedCompilerInstance;
+    if (!ci) {
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                       "Failed to setup CompilerInstance: " + setupError);
+                                       "Shared CompilerInstance not initialized");
     }
-    
-    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance setup successful\n";
-    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance ASTContext: " << &tempCI->getASTContext() << "\n";
-    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance SourceManager: " << &tempCI->getSourceMgr() << "\n";
-    llvm::errs() << "[SwiftIncrementalParser] CompilerInstance DiagnosticEngine: " << &tempCI->getDiags() << "\n";
-    
-    // Set the main module to our new module
-    tempCI->setMainModule(newModule);
+    // Configure the shared CompilerInstance's invocation (using a non-const ref).
+    // This is the supported way to adjust options post-setup in-process.
+    auto &inv = const_cast<swift::CompilerInvocation&>(ci->getInvocation());
+    inv.getFrontendOptions().ModuleName = moduleName;
+    inv.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
+    inv.getLangOptions().DebugDumpCycles = true;
+    {
+        auto &argv = inv.getFrontendOptions().ImmediateArgv;
+        // Avoid duplicating flags across evaluations
+        bool hasDebugCycles = false;
+        for (size_t i = 0; i + 1 < argv.size(); ++i) {
+            if (argv[i] == "-Xfrontend" && argv[i+1] == "-debug-cycles") { hasDebugCycles = true; break; }
+        }
+        if (!hasDebugCycles) {
+            argv.push_back("-Xfrontend");
+            argv.push_back("-debug-cycles");
+        }
+    }
+    llvm::errs() << "[SwiftIncrementalParser] Shared CI ASTContext: " << &ci->getASTContext() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Shared CI SourceManager: " << &ci->getSourceMgr() << "\n";
+    llvm::errs() << "[SwiftIncrementalParser] Shared CI DiagnosticEngine: " << &ci->getDiags() << "\n";
+    // Point the shared CI to the newly created main module (same ASTContext)
+    ci->setMainModule(newModule);
     
     // Add detailed logging for import resolution debugging
     llvm::errs() << "[SwiftIncrementalParser] About to call performSema() - this will trigger import resolution\n";
@@ -841,13 +829,14 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     llvm::errs() << "[SwiftIncrementalParser] ASTContext had error before performSema: " << sharedASTContext->hadError() << "\n";
     llvm::errs() << "[SwiftIncrementalParser] ASTContext Diags had error before performSema: " << sharedASTContext->Diags.hadAnyError() << "\n";
     
-    // Add diagnostic consumer BEFORE performSema to capture errors
+    // Add diagnostic consumer BEFORE performSema to capture errors.
+    // Important: remove it before returning to avoid dangling references.
     swift::PrintingDiagnosticConsumer printDiags;
-    tempCI->getDiags().addConsumer(printDiags);
+    ci->getDiags().addConsumer(printDiags);
     llvm::errs() << "[SwiftIncrementalParser] Added diagnostic consumer to capture errors\n";
     
     // Log search paths
-    auto &searchPaths2 = invocation.getSearchPathOptions();
+    auto &searchPaths2 = ci->getInvocation().getSearchPathOptions();
     llvm::errs() << "[SwiftIncrementalParser] Runtime library paths count: " << searchPaths2.RuntimeLibraryPaths.size() << "\n";
     for (size_t i = 0; i < searchPaths2.RuntimeLibraryPaths.size(); ++i) {
         llvm::errs() << "[SwiftIncrementalParser]   Runtime path " << i << ": " << searchPaths2.RuntimeLibraryPaths[i] << "\n";
@@ -870,12 +859,13 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     }
     
     // Perform semantic analysis
-    tempCI->performSema();
+    llvm::errs() << "[SwiftIncrementalParser] Calling performSema()\n";
+    ci->performSema();
     llvm::errs() << "[SwiftIncrementalParser] performSema() completed\n";
     
     // Check for errors and get detailed diagnostic information
     bool astHadError = sharedASTContext->hadError();
-    bool diagsHadError = tempCI->getDiags().hadAnyError();
+    bool diagsHadError = ci->getDiags().hadAnyError();
     
     llvm::errs() << "[SwiftIncrementalParser] AST had error: " << astHadError << "\n";
     llvm::errs() << "[SwiftIncrementalParser] Diagnostics had error: " << diagsHadError << "\n";
@@ -933,16 +923,16 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     if (astHadError || diagsHadError) {
         llvm::errs() << "[SwiftIncrementalParser] ERROR: Semantic analysis failed\n";
         
-        // Try to print diagnostic information
+        // Print diagnostic information
         llvm::errs() << "[SwiftIncrementalParser] Attempting to print diagnostic information...\n";
-        auto& diagEngine = tempCI->getDiags();
+        auto& diagEngine = ci->getDiags();
         llvm::errs() << "[SwiftIncrementalParser] Diagnostic engine available\n";
         
         // Force the diagnostic engine to flush any pending messages
         llvm::errs() << "[SwiftIncrementalParser] Forcing diagnostic flush...\n";
         diagEngine.flushConsumers();
         
-        // Try to get more detailed error information
+        // Log error summary flags
         llvm::errs() << "[SwiftIncrementalParser] Had any error: " << diagEngine.hadAnyError() << "\n";
         llvm::errs() << "[SwiftIncrementalParser] Has fatal error: " << diagEngine.hasFatalErrorOccurred() << "\n";
         
@@ -955,7 +945,7 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
             llvm::errs() << "[SwiftIncrementalParser]   [" << i << "] " << swift::Decl::getKindName(decl->getKind()) << "\n";
         }
         
-        // Try to get more information about the source file
+        // Dump the source buffer text for the SourceFile
         auto sourceFiles = newModule->getFiles();
         if (!sourceFiles.empty()) {
             auto sourceFile = llvm::dyn_cast<swift::SourceFile>(sourceFiles[0]);
@@ -963,6 +953,10 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
                 llvm::errs() << "[SwiftIncrementalParser] Source file has " << sourceFile->getTopLevelDecls().size() << " top-level declarations\n";
                 auto bufferID = sourceFile->getBufferID();
                 llvm::errs() << "[SwiftIncrementalParser] Source file buffer ID: " << bufferID << "\n";
+                if (bufferID) {
+                    auto curBuf = sharedASTContext->SourceMgr.getEntireTextForBuffer(bufferID);
+                    llvm::errs() << "[SwiftIncrementalParser] Source buffer contents:\n" << curBuf << "\n";
+                }
             }
         }
         
@@ -971,8 +965,16 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
         llvm::errs() << "[SwiftIncrementalParser] Module name: " << newModule->getName() << "\n";
         llvm::errs() << "[SwiftIncrementalParser] Module is main module: " << newModule->isMainModule() << "\n";
         
-        return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                       "Semantic analysis failed");
+        // Ensure we remove the diagnostic consumer before returning
+        ci->getDiags().removeConsumer(printDiags);
+        std::string errMsg;
+        {
+            llvm::raw_string_ostream os(errMsg);
+            os << "Semantic analysis failed (module=" << moduleName
+               << ", hadAnyError=" << diagEngine.hadAnyError()
+               << ", hasFatalError=" << diagEngine.hasFatalErrorOccurred() << ")";
+        }
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), errMsg.c_str());
     }
     
     llvm::errs() << "[SwiftIncrementalParser] Semantic analysis successful\n";
@@ -1000,6 +1002,8 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
         ptu.TheModule = nullptr;
     }
     
+    // Remove the diagnostic consumer now that we're done
+    ci->getDiags().removeConsumer(printDiags);
     llvm::errs() << "[SwiftIncrementalParser] Parse completed successfully\n";
     return ptu;
 }
@@ -1284,7 +1288,7 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     llvm::errs() << "[SwiftInterpreter] Skipping creation of SwiftJITREPL_Base to avoid import cycles\n";
     
     // Create incremental parser with shared ASTContext and modules
-    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), compilerInstance.get(), compilerInvocation);
+    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), this->compilerInstance.get(), compilerInvocation);
     
     // Create JIT builder
     auto jitBuilder = llvm::orc::LLJITBuilder();
@@ -1345,9 +1349,13 @@ llvm::Error SwiftInterpreter::parseAndExecute(llvm::StringRef Code) {
     // Parse the transformed code
     llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to parse transformed code...\n";
     auto ptuOrError = IncrParser->parse(transformedCode);
+    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] PTU or error?\n";
     if (!ptuOrError) {
         llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Parse failed\n";
-        return ptuOrError.takeError();
+        llvm::Error Err = ptuOrError.takeError();
+        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse llvm::Error: "
+                     << llvm::toString(std::move(Err)) << "\n";
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "Parse failed");
     }
     llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse successful\n";
     

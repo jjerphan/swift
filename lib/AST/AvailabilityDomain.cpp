@@ -31,6 +31,9 @@ getCustomDomainKind(clang::FeatureAvailKind featureAvailKind) {
     llvm_unreachable("unexpected kind");
   case clang::FeatureAvailKind::Available:
     return CustomAvailabilityDomain::Kind::Enabled;
+  case clang::FeatureAvailKind::AlwaysAvailable:
+    // Treat "always available" the same as enabled for custom availability domains.
+    return CustomAvailabilityDomain::Kind::Enabled;
   case clang::FeatureAvailKind::Unavailable:
     return CustomAvailabilityDomain::Kind::Disabled;
   case clang::FeatureAvailKind::Dynamic:

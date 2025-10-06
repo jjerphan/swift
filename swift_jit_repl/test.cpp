@@ -7,8 +7,8 @@ int main() {
     
     try {
         // Create REPL instance
-        SwiftJITREPL::REPLConfig config;
-        SwiftJITREPL::SwiftJITREPL repl(config);
+    SwiftJITREPL::REPLConfig config;
+    SwiftJITREPL::SwiftJITREPL repl(config);
     
         // Test 1: Basic expression evaluation
         std::cout << "\n=== Test 1: Basic Expression ===" << std::endl;
