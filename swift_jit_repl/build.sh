@@ -6,6 +6,14 @@
 set -e
 
 echo "=== Building Swift JIT REPL ==="
+echo "Modular structure:"
+echo "  - Common.h: Common types and forward declarations"
+echo "  - SwiftPartialTranslationUnit.h: Data structure for PTUs"
+echo "  - SwiftIncrementalParser.h/.cpp: Parsing logic"
+echo "  - SwiftIncrementalExecutor.h/.cpp: JIT execution logic"
+echo "  - SwiftInterpreter.h/.cpp: Main interpreter"
+echo "  - SwiftJITREPL.h/.cpp: Main REPL interface"
+echo ""
 
 # Check if we're in the right directory
 if [ ! -f "CMakeLists.txt" ]; then
@@ -31,12 +39,21 @@ make -j$(nproc)
 
 echo "=== Build completed successfully! ==="
 echo ""
+echo "Library created:"
+echo "  - lib/libSwiftJITREPL.so: Main Swift JIT REPL library"
+echo ""
 echo "Executables created:"
-echo "  - swift_jit_example: Basic usage examples"
-echo "  - swift_jit_test: Comprehensive test suite"
-echo "  - swift_jit_server: Server example with threading"
+echo "  - bin/swift_jit_example: Basic usage examples"
+echo "  - bin/swift_jit_test: Comprehensive test suite"
+echo ""
+echo "Header files installed:"
+echo "  - Common.h: Common types and forward declarations"
+echo "  - SwiftPartialTranslationUnit.h: Data structure for PTUs"
+echo "  - SwiftIncrementalParser.h: Parsing logic"
+echo "  - SwiftIncrementalExecutor.h: JIT execution logic"
+echo "  - SwiftInterpreter.h: Main interpreter"
+echo "  - SwiftJITREPL.h: Main REPL interface"
 echo ""
 echo "Run examples:"
 echo "  ./bin/swift_jit_example"
 echo "  ./bin/swift_jit_test"
-echo "  ./bin/swift_jit_server"

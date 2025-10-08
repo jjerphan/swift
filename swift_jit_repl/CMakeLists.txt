@@ -369,8 +369,24 @@ list(APPEND SWIFT_SYSTEM_LIBRARIES "uuid")
 
 # Create the main library
 add_library(SwiftJITREPL SHARED
+    # Main interface files
     SwiftJITREPL.cpp
     SwiftJITREPL.h
+    
+    # Common types and forward declarations
+    Common.h
+    
+    # Data structures
+    SwiftPartialTranslationUnit.h
+    
+    
+    # Core components
+    SwiftIncrementalParser.cpp
+    SwiftIncrementalParser.h
+    SwiftIncrementalExecutor.cpp
+    SwiftIncrementalExecutor.h
+    SwiftInterpreter.cpp
+    SwiftInterpreter.h
 )
 
 # Set properties
@@ -501,6 +517,12 @@ install(TARGETS swift_jit_example swift_jit_test
 )
 
 # Install headers
-install(FILES src/SwiftJITREPL.h
+install(FILES 
+    SwiftJITREPL.h
+    Common.h
+    SwiftPartialTranslationUnit.h
+    SwiftIncrementalParser.h
+    SwiftIncrementalExecutor.h
+    SwiftInterpreter.h
     DESTINATION include
 )
