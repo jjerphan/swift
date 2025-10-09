@@ -41,6 +41,7 @@ public:
     swift::ASTContext* getASTContext() const { return sharedASTContext; }
     
 private:
+    std::string accumulateAllCode(const std::string& newInput);
     swift::ImplicitImportInfo createImplicitImports();
 };
 

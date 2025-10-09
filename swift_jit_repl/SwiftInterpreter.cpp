@@ -204,7 +204,7 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     llvm::errs() << "[SwiftInterpreter] Skipping creation of SwiftJITREPL_Base to avoid import cycles\n";
     
     // Create incremental parser with shared ASTContext and modules
-    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), compilerInstance.get(), compilerInvocation);
+    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), this->compilerInstance.get(), compilerInvocation);
     
     // Create JIT builder
     auto jitBuilder = llvm::orc::LLJITBuilder();
@@ -269,9 +269,9 @@ llvm::Error SwiftInterpreter::parseAndExecute(llvm::StringRef Code) {
     if (!ptuOrError) {
         llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Parse failed\n";
         llvm::Error Err = ptuOrError.takeError();
-        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse llvm::Error: "
-                     << llvm::toString(std::move(Err)) << "\n";
-        return llvm::createStringError(llvm::inconvertibleErrorCode(), "Parse failed");
+        std::string errStr = llvm::toString(std::move(Err));
+        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse llvm::Error: " << errStr << "\n";
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), ("Parse failed: " + errStr).c_str());
     }
     llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse successful\n";
     
@@ -279,9 +279,9 @@ llvm::Error SwiftInterpreter::parseAndExecute(llvm::StringRef Code) {
     
     // Execute the PTU and handle any errors
     if (auto err = execute(ptu)) {
-        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Execute failed: " 
-                    << llvm::toString(std::move(err)) << "\n";
-        return llvm::Error::success(); // Return success to avoid crash
+        std::string execErr = llvm::toString(std::move(err));
+        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Execute failed: " << execErr << "\n";
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), ("Execute failed: " + execErr).c_str());
     }
     
     return llvm::Error::success();

@@ -326,10 +326,11 @@ public:
             auto error = interpreter->parseAndExecute(expression);
             llvm::errs() << "[SwiftJITREPL::evaluate] parseAndExecute completed\n";
             if (error) {
-                lastError = "Failed to execute: " + llvm::toString(std::move(error));
+                std::string errStr = llvm::toString(std::move(error));
+                lastError = "Failed to execute: " + errStr;
                 stats.total_expressions++;
                 stats.failed_compilations++;
-                return EvaluationResult("Failed to execute: " + llvm::toString(std::move(error)));
+                return EvaluationResult("Failed to execute: " + errStr);
             }
             
             auto end_time = std::chrono::high_resolution_clock::now();

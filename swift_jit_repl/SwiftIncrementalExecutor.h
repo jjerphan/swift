@@ -36,6 +36,10 @@ public:
     // Get symbol address
     llvm::Expected<llvm::orc::ExecutorAddr> getSymbolAddress(llvm::StringRef Name) const;
     
+    // Get symbol address with name kind (following Clang's pattern)
+    enum SymbolNameKind { LinkerName, MangledName };
+    llvm::Expected<llvm::orc::ExecutorAddr> getSymbolAddress(llvm::StringRef Name, SymbolNameKind NameKind) const;
+    
     // Clean up the JIT instance
     llvm::Error cleanUp();
     
