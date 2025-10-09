@@ -16,7 +16,7 @@ private:
     std::vector<swift::ModuleDecl*>* modules;  // Raw pointers (owned by ASTContext)
     llvm::orc::ThreadSafeContext* TSCtx;
     swift::CompilerInstance* sharedCompilerInstance;  // Reference to shared CompilerInstance
-    swift::CompilerInvocation* compilerInvocation;  // Reference to shared CompilerInvocation
+    swift::CompilerInvocation* sharedCompilerInvocation;  // Reference to shared CompilerInvocation
     std::list<SwiftPartialTranslationUnit> PTUs;
     unsigned InputCount = 0;
     

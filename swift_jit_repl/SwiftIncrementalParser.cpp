@@ -230,8 +230,8 @@ SwiftIncrementalParser::SwiftIncrementalParser(swift::ASTContext* sharedASTConte
                                                std::vector<swift::ModuleDecl*>* modules,
                                                llvm::orc::ThreadSafeContext* TSCtx,
                                                swift::CompilerInstance* sharedCompilerInstance,
-                                               swift::CompilerInvocation* compilerInvocation)
-    : sharedASTContext(sharedASTContext), modules(modules), TSCtx(TSCtx), sharedCompilerInstance(sharedCompilerInstance), compilerInvocation(compilerInvocation) {
+                                               swift::CompilerInvocation* sharedCompilerInvocation)
+    : sharedASTContext(sharedASTContext), modules(modules), TSCtx(TSCtx), sharedCompilerInstance(sharedCompilerInstance), sharedCompilerInvocation(sharedCompilerInvocation) {
 }
 
 SwiftIncrementalParser::~SwiftIncrementalParser() {
@@ -479,7 +479,7 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     llvm::errs() << "[SwiftIncrementalParser] Creating new PTU\n";
     PTUs.emplace_back();
     auto& ptu = PTUs.back();
-    ptu.ModulePart = accumulatedModule;
+    ptu.moduleDeclaration = accumulatedModule;
     ptu.SharedASTContext = sharedASTContext;
     ptu.InputCode = Input.str();
     
@@ -508,7 +508,7 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
 void SwiftIncrementalParser::cleanUpPTU(SwiftPartialTranslationUnit& PTU) {
     // Clean up the LLVM module
     PTU.TheModule.reset();
-    PTU.ModulePart = nullptr;  // ModuleDecl is owned by ASTContext
+    PTU.moduleDeclaration = nullptr;  // ModuleDecl is owned by ASTContext
     PTU.InputCode.clear();
 }
 

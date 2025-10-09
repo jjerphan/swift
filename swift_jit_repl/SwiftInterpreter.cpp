@@ -135,7 +135,7 @@ static void validateSwiftRuntimePaths() {
 
 SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     // Store reference to compiler invocation
-    compilerInvocation = invocation;
+    sharedCompilerInvocation = invocation;
     
     // Validate Swift runtime paths
     validateSwiftRuntimePaths();
@@ -204,7 +204,7 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     llvm::errs() << "[SwiftInterpreter] Skipping creation of SwiftJITREPL_Base to avoid import cycles\n";
     
     // Create incremental parser with shared ASTContext and modules
-    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), this->compilerInstance.get(), compilerInvocation);
+    IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), this->compilerInstance.get(), sharedCompilerInvocation);
     
     // Create JIT builder
     auto jitBuilder = llvm::orc::LLJITBuilder();

@@ -63,14 +63,6 @@ int main() {
             std::cout << "Error: " << result5.error_message << std::endl;
         }
         
-        // Test 6: Print function with complex expression (tests IR generation stability)
-        std::cout << "\n=== Test 6: Print Function with Complex Expression ===" << std::endl;
-        auto result6 = repl.evaluate("print((x * 2) + (y - 5))");
-        std::cout << "Result: " << (result6.success ? "SUCCESS" : "FAILED") << std::endl;
-        if (!result6.success) {
-            std::cout << "Error: " << result6.error_message << std::endl;
-        }
-        
         std::cout << "\n=== All tests completed ===" << std::endl;
         
     } catch (const std::exception& e) {

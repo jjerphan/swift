@@ -34,7 +34,7 @@ private:
     std::unique_ptr<SwiftIncrementalParser> IncrParser;
     std::unique_ptr<SwiftIncrementalExecutor> IncrExecutor;
     std::unique_ptr<swift::CompilerInstance> compilerInstance;  // For proper SourceManager initialization
-    swift::CompilerInvocation* compilerInvocation;  // Reference to shared compiler invocation
+    swift::CompilerInvocation* sharedCompilerInvocation;  // Reference to shared compiler invocation
     
     // Runtime interface builder for value capture
     std::unique_ptr<SwiftRuntimeInterfaceBuilder> RuntimeIB;

@@ -365,7 +365,7 @@ string(REPLACE " " ";" LLVM_LDFLAGS "${LLVM_LDFLAGS_RAW}")
 string(REPLACE " " ";" SWIFT_SYSTEM_LIBRARIES "${SWIFT_SYSTEM_LIBRARIES_RAW}")
 
 # Add additional system libraries
-list(APPEND SWIFT_SYSTEM_LIBRARIES "uuid")
+list(APPEND SWIFT_SYSTEM_LIBRARIES "uuid" "edit")
 
 # Create the main library
 add_library(SwiftJITREPL SHARED
@@ -460,6 +460,43 @@ target_link_libraries(swift_jit_example PRIVATE
     ${ADDITIONAL_LIBRARIES}
 )
 
+# Create swift-repl executable
+add_executable(swift_repl
+    swift_repl.cpp
+)
+
+target_include_directories(swift_repl PRIVATE
+    ${SWIFT_SOURCE_DIR}/include
+    ${SWIFT_BUILD_LLVM}/include
+    ${SWIFT_BUILD_LLVM}/tools/clang/include
+    ${CLANG_SOURCE_DIR}/include
+    ${LLVM_SOURCE_DIR}/include
+    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+)
+
+# Add LLVM C++ flags but override exception handling
+target_compile_options(swift_repl PRIVATE ${LLVM_CXXFLAGS})
+# Override LLVM's -fno-exceptions to allow exceptions in our code
+target_compile_options(swift_repl PRIVATE -fexceptions)
+# Add Swift-specific compiler definitions
+target_compile_definitions(swift_repl PRIVATE
+    SWIFT_TARGET_LIBRARY_NAME=swift
+    SWIFT_TARGET_LIBRARY_VERSION=1
+    __STDC_LIMIT_MACROS
+    __STDC_CONSTANT_MACROS
+)
+
+target_link_libraries(swift_repl PRIVATE
+    SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+)
+
 # Create test executable
 add_executable(swift_jit_test
     test.cpp
@@ -502,7 +539,7 @@ set_target_properties(SwiftJITREPL PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
-set_target_properties(swift_jit_example swift_jit_test PROPERTIES
+set_target_properties(swift_jit_example swift_jit_test swift_repl PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
@@ -512,7 +549,7 @@ install(TARGETS SwiftJITREPL
     ARCHIVE DESTINATION lib
 )
 
-install(TARGETS swift_jit_example swift_jit_test
+install(TARGETS swift_jit_example swift_jit_test swift_repl
     RUNTIME DESTINATION bin
 )
 

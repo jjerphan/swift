@@ -81,7 +81,7 @@ llvm::Error SwiftIncrementalExecutor::addModule(SwiftPartialTranslationUnit& PTU
     // If no LLVM module, we need to compile the Swift code to LLVM IR first
     llvm::errs() << "[SwiftIncrementalExecutor] PTU has no LLVM module\n";
     llvm::errs() << "[SwiftIncrementalExecutor] Input code: " << PTU.InputCode << "\n";
-    llvm::errs() << "[SwiftIncrementalExecutor] Module part: " << (PTU.ModulePart ? "present" : "null") << "\n";    
+    llvm::errs() << "[SwiftIncrementalExecutor] Module declaration: " << (PTU.moduleDeclaration ? "present" : "null") << "\n";    
     llvm::errs() << "[SwiftIncrementalExecutor] Returning success (no LLVM module to add)\n";
     return llvm::Error::success();
 }
