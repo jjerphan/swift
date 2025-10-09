@@ -80,12 +80,9 @@ public:
     
 private:
     std::string transformForValuePrinting(const std::string& code) {
-        llvm::errs() << "[transformForValuePrinting] Input code: '" << code << "'\n";
-        
         // Add Swift import to make standard library operators available
         std::string result = "import Swift\n" + code;
         
-        llvm::errs() << "[transformForValuePrinting] Generated Swift code:\n" << result << "\n";
         return result;
     }
 };
@@ -119,17 +116,13 @@ static void validateSwiftRuntimePaths() {
     for (size_t i = 0; i < pathsToCheck.size(); ++i) {
         // Use access() system call for path validation (more portable than std::filesystem)
         if (access(pathsToCheck[i].c_str(), F_OK) != 0) {
-            llvm::errs() << "WARNING: Swift runtime path does not exist: " << pathNames[i] 
-                        << " = " << pathsToCheck[i] << "\n";
             allPathsValid = false;
         }
     }
     
     if (!allPathsValid) {
-        llvm::errs() << "WARNING: Some Swift runtime paths are invalid. This may cause runtime crashes.\n";
-        llvm::errs() << "Please ensure the Swift runtime is properly installed and paths are correctly configured.\n";
-    } else {
-        llvm::errs() << "INFO: All Swift runtime paths validated successfully.\n";
+        // Some Swift runtime paths are invalid. This may cause runtime crashes.
+        // Please ensure the Swift runtime is properly installed and paths are correctly configured.
     }
 }
 
@@ -144,16 +137,12 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     initializeLLVMTargetsOnce();
     
     // Verify target registration
-    llvm::errs() << "[SwiftInterpreter] Verifying target registration...\n";
     auto targetTriple = llvm::Triple("x86_64-unknown-linux-gnu");
-    llvm::errs() << "[SwiftInterpreter] Target triple: " << targetTriple.str() << "\n";
     
     std::string targetError;
     auto target = llvm::TargetRegistry::lookupTarget(targetTriple.str(), targetError);
-    if (target) {
-        llvm::errs() << "[SwiftInterpreter] Target found: " << target->getName() << "\n";
-    } else {
-        llvm::errs() << "[SwiftInterpreter] ERROR: Target not found: " << targetError << "\n";
+    if (!target) {
+        // Target not found
     }
     
     // Note: Swift runtime loading is handled internally by the CompilerInstance
@@ -163,7 +152,6 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::make_unique<llvm::LLVMContext>());
     
     // Create shared ASTContext directly (bypass CompilerInstance)
-    llvm::errs() << "[SwiftInterpreter] Creating shared ASTContext...\n";
     
     // Create a CompilerInstance to properly initialize SourceManager
     auto compilerInstance = std::make_unique<swift::CompilerInstance>();
@@ -171,7 +159,6 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     // Setup the CompilerInstance with our invocation
     std::string error;
     if (compilerInstance->setup(*invocation, error)) {
-        llvm::errs() << "[SwiftInterpreter] ERROR: Failed to setup CompilerInstance: " << error << "\n";
         return;
     }
     
@@ -193,15 +180,12 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     // The multi-module approach with explicit imports should handle cross-module access
     
     // Create initial empty module for base functionality
-    llvm::errs() << "[SwiftInterpreter] Creating initial base module...\n";
     
     // Let the CompilerInstance handle Swift standard library loading
     // The CompilerInstance will automatically load the Swift standard library
     // when we call performSema() or other Swift compiler functions
-    llvm::errs() << "[SwiftInterpreter] Swift standard library will be loaded automatically by CompilerInstance\n";
     
     // Skip creating/importing a base module to avoid accidental cycles
-    llvm::errs() << "[SwiftInterpreter] Skipping creation of SwiftJITREPL_Base to avoid import cycles\n";
     
     // Create incremental parser with shared ASTContext and modules
     IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), this->compilerInstance.get(), sharedCompilerInvocation);
@@ -210,14 +194,11 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     auto jitBuilder = llvm::orc::LLJITBuilder();
     auto jitOrError = jitBuilder.create();
     if (!jitOrError) {
-        llvm::errs() << "Failed to create JIT builder: " << llvm::toString(jitOrError.takeError()) << "\n";
         return;
     }
     
     // Create incremental executor
     IncrExecutor = std::make_unique<SwiftIncrementalExecutor>(*TSCtx, std::move(*jitOrError));
-    
-    llvm::errs() << "[SwiftInterpreter] Multi-module interpreter initialized successfully\n";
     
     // Mark the start of user code (separates runtime code from user code)
     markUserCodeStart();
@@ -256,31 +237,22 @@ llvm::Error SwiftInterpreter::undo(unsigned N) {
 }
 
 llvm::Error SwiftInterpreter::parseAndExecute(llvm::StringRef Code) {
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Starting execution of: " << Code << "\n";
-    
     // Transform the code to wrap it in a main function
     std::string transformedCode = synthesizeExpr(Code.str());
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Transformed code: " << transformedCode << "\n";
     
     // Parse the transformed code
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to parse transformed code...\n";
     auto ptuOrError = IncrParser->parse(transformedCode);
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] PTU or error?\n";
     if (!ptuOrError) {
-        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Parse failed\n";
         llvm::Error Err = ptuOrError.takeError();
         std::string errStr = llvm::toString(std::move(Err));
-        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse llvm::Error: " << errStr << "\n";
         return llvm::createStringError(llvm::inconvertibleErrorCode(), ("Parse failed: " + errStr).c_str());
     }
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Parse successful\n";
     
     auto& ptu = *ptuOrError;
     
     // Execute the PTU and handle any errors
     if (auto err = execute(ptu)) {
         std::string execErr = llvm::toString(std::move(err));
-        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Execute failed: " << execErr << "\n";
         return llvm::createStringError(llvm::inconvertibleErrorCode(), ("Execute failed: " + execErr).c_str());
     }
     
@@ -289,22 +261,16 @@ llvm::Error SwiftInterpreter::parseAndExecute(llvm::StringRef Code) {
 
 llvm::Error SwiftInterpreter::execute(SwiftPartialTranslationUnit& ptu) {
     // Add to JIT
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to add module to JIT...\n";
     auto addError = IncrExecutor->addModule(ptu);
     if (addError) {
-        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Failed to add module to JIT\n";
         return addError;
     }
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] Module added to JIT successfully\n";
     
     // Execute using global constructor approach (like Clang IncrementalExecutor)
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] About to execute JIT code...\n";
     auto execError = IncrExecutor->runCtors();
     if (execError) {
-        llvm::errs() << "[SwiftInterpreter::ParseAndExecute] ERROR: Execution failed\n";
         return execError;
     }
-    llvm::errs() << "[SwiftInterpreter::ParseAndExecute] JIT execution completed\n";
     
     return llvm::Error::success();
 }

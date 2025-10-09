@@ -101,17 +101,13 @@ static void validateSwiftRuntimePaths() {
     for (size_t i = 0; i < pathsToCheck.size(); ++i) {
         // Use access() system call for path validation (more portable than std::filesystem)
         if (access(pathsToCheck[i].c_str(), F_OK) != 0) {
-            llvm::errs() << "WARNING: Swift runtime path does not exist: " << pathNames[i] 
-                        << " = " << pathsToCheck[i] << "\n";
             allPathsValid = false;
         }
     }
     
     if (!allPathsValid) {
-        llvm::errs() << "WARNING: Some Swift runtime paths are invalid. This may cause runtime crashes.\n";
-        llvm::errs() << "Please ensure the Swift runtime is properly installed and paths are correctly configured.\n";
-    } else {
-        llvm::errs() << "INFO: All Swift runtime paths validated successfully.\n";
+        // Some Swift runtime paths are invalid. This may cause runtime crashes.
+        // Please ensure the Swift runtime is properly installed and paths are correctly configured.
     }
 }
 
@@ -143,7 +139,6 @@ static std::mutex g_llvmInitMutex;
 inline void initializeLLVMTargetsOnce() {
     std::lock_guard<std::mutex> lock(g_llvmInitMutex);
     if (!g_llvmTargetsInitialized) {
-        llvm::errs() << "[initializeLLVMTargetsOnce] Initializing LLVM targets...\n";
         llvm::InitializeAllTargets();
         llvm::InitializeAllTargetMCs();
         llvm::InitializeAllAsmPrinters();
@@ -151,7 +146,6 @@ inline void initializeLLVMTargetsOnce() {
         llvm::InitializeAllDisassemblers();
         llvm::InitializeAllTargetInfos();
         g_llvmTargetsInitialized = true;
-        llvm::errs() << "[initializeLLVMTargetsOnce] LLVM targets initialized successfully\n";
     }
 }
 
@@ -270,17 +264,14 @@ private:
             
             // Validate the CompilerInvocation by creating a temporary CompilerInstance
             // This ensures our configuration is correct before we start using it
-            llvm::errs() << "[SwiftJITREPL::initialize] Validating CompilerInvocation configuration...\n";
             auto tempCI = std::make_unique<swift::CompilerInstance>();
             std::string setupError;
             if (tempCI->setup(compilerInvocation, setupError)) {
-                llvm::errs() << "[SwiftJITREPL::initialize] CompilerInstance setup failed: " << setupError << "\n";
                 lastError = "Failed to validate Swift compiler configuration: " + (setupError.empty() ? "Unknown error" : setupError);
                 initialized = false;
                 return false;
             }
             // Configuration is valid, we can discard the temporary CompilerInstance
-            llvm::errs() << "[SwiftJITREPL::initialize] CompilerInstance setup successful\n";
             tempCI.reset();
             
             // Create the interpreter for incremental compilation
@@ -304,10 +295,7 @@ private:
 public:
     
     EvaluationResult evaluate(const std::string& expression) {
-        llvm::errs() << "[SwiftJITREPL::evaluate] Starting evaluation of: " << expression << "\n";
-        
         if (!initialized) {
-            llvm::errs() << "[SwiftJITREPL::evaluate] ERROR: REPL not initialized\n";
             return EvaluationResult("REPL not initialized");
         }
         
@@ -316,15 +304,12 @@ public:
         try {
             // Use the interpreter to parse and execute the code
             if (!interpreter) {
-                llvm::errs() << "[SwiftJITREPL::evaluate] ERROR: Interpreter not initialized\n";
                 lastError = "Interpreter not initialized";
                 return EvaluationResult("Interpreter not initialized");
             }
             
-            llvm::errs() << "[SwiftJITREPL::evaluate] About to call parseAndExecute...\n";
             // Use parseAndExecute to handle the compilation and execution
             auto error = interpreter->parseAndExecute(expression);
-            llvm::errs() << "[SwiftJITREPL::evaluate] parseAndExecute completed\n";
             if (error) {
                 std::string errStr = llvm::toString(std::move(error));
                 lastError = "Failed to execute: " + errStr;
@@ -400,12 +385,10 @@ public:
         // For multiple expressions, we'll evaluate each one individually
         // Stop on first failure to avoid cascading errors
         for (const auto& expr : expressions) {
-            llvm::errs() << "[SwiftJITREPL] Evaluating expression: " << expr << "\n";
             auto result = evaluate(expr);
             results.push_back(result);
             
             if (!result.success) {
-                llvm::errs() << "[SwiftJITREPL] Stopping evaluation due to failure: " << result.error_message << "\n";
                 // Fill remaining results with failure
                 while (results.size() < expressions.size()) {
                     results.push_back(EvaluationResult("Stopped due to previous failure"));
@@ -530,11 +513,9 @@ bool SwiftJITREPL::isAvailable() {
         auto tempCI = std::make_unique<swift::CompilerInstance>();
         std::string error;
         if (tempCI->setup(invocation, error)) {
-            llvm::errs() << "[isSwiftJITAvailable] CompilerInstance setup failed: " << error << "\n";
             return false; // Setup failed
         }
         // Configuration is valid
-        llvm::errs() << "[isSwiftJITAvailable] CompilerInstance setup successful\n";
         
         return true;
     } catch (...) {

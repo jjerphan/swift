@@ -497,6 +497,90 @@ target_link_libraries(swift_repl PRIVATE
     ${ADDITIONAL_LIBRARIES}
 )
 
+# Create test executable for incremental parser
+add_executable(test_incremental_parser
+    test_incremental_parser.cpp
+)
+
+# AST comparison test executable
+add_executable(test_ast_comparison
+    test_ast_comparison.cpp
+)
+
+target_include_directories(test_incremental_parser PRIVATE
+    ${SWIFT_SOURCE_DIR}/include
+    ${SWIFT_BUILD_LLVM}/include
+    ${SWIFT_BUILD_LLVM}/tools/clang/include
+    ${CLANG_SOURCE_DIR}/include
+    ${LLVM_SOURCE_DIR}/include
+    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+    /usr/include/llvm-gtest
+)
+
+# Add LLVM C++ flags but override exception handling
+target_compile_options(test_incremental_parser PRIVATE ${LLVM_CXXFLAGS})
+# Override LLVM's -fno-exceptions to allow exceptions in our code
+target_compile_options(test_incremental_parser PRIVATE -fexceptions)
+# Add Swift-specific compiler definitions
+target_compile_definitions(test_incremental_parser PRIVATE
+    SWIFT_TARGET_LIBRARY_NAME=swift
+    SWIFT_TARGET_LIBRARY_VERSION=1
+    __STDC_LIMIT_MACROS
+    __STDC_CONSTANT_MACROS
+)
+
+target_link_libraries(test_incremental_parser PRIVATE
+    SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+    llvm_gtest
+    llvm_gtest_main
+)
+
+# Configure AST comparison test
+target_include_directories(test_ast_comparison PRIVATE
+    ${SWIFT_SOURCE_DIR}/include
+    ${SWIFT_BUILD_LLVM}/include
+    ${SWIFT_BUILD_LLVM}/tools/clang/include
+    ${CLANG_SOURCE_DIR}/include
+    ${LLVM_SOURCE_DIR}/include
+    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+    /usr/include/llvm-gtest
+)
+
+target_compile_options(test_ast_comparison PRIVATE ${LLVM_CXXFLAGS})
+target_compile_options(test_ast_comparison PRIVATE -fexceptions)
+
+target_compile_definitions(test_ast_comparison PRIVATE
+    SWIFT_TARGET_LIBRARY_NAME=swift
+    SWIFT_TARGET_LIBRARY_VERSION=1
+    __STDC_LIMIT_MACROS
+    __STDC_CONSTANT_MACROS
+    SWIFT_RUNTIME_LIBRARY_PATHS="${SWIFT_RUNTIME_LIBRARY_PATHS}"
+    SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1="${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1}"
+    SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2="${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2}"
+    SWIFT_RUNTIME_RESOURCE_PATH="${SWIFT_RUNTIME_RESOURCE_PATH}"
+    SWIFT_SDK_PATH="${SWIFT_SDK_PATH}"
+)
+
+target_link_libraries(test_ast_comparison PRIVATE
+    SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+    llvm_gtest
+    llvm_gtest_main
+)
+
 # Create test executable
 add_executable(swift_jit_test
     test.cpp
@@ -539,7 +623,7 @@ set_target_properties(SwiftJITREPL PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
-set_target_properties(swift_jit_example swift_jit_test swift_repl PROPERTIES
+set_target_properties(swift_jit_example swift_jit_test swift_repl test_incremental_parser test_ast_comparison PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
@@ -549,7 +633,7 @@ install(TARGETS SwiftJITREPL
     ARCHIVE DESTINATION lib
 )
 
-install(TARGETS swift_jit_example swift_jit_test swift_repl
+install(TARGETS swift_jit_example swift_jit_test swift_repl test_incremental_parser test_ast_comparison
     RUNTIME DESTINATION bin
 )
 
