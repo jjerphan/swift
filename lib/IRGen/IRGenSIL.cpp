@@ -1335,10 +1335,47 @@ public:
   void visitExistentialMetatypeInst(ExistentialMetatypeInst *i);
   void visitTupleExtractInst(TupleExtractInst *i);
   void visitDestructureTupleInst(DestructureTupleInst *i) {
-    llvm_unreachable("unimplemented");
+    Explosion fullTuple = getLoweredExplosion(i->getOperand());
+    SILType baseType = i->getOperand()->getType();
+    
+    // For each result of the destructure instruction, project the corresponding tuple element
+    for (unsigned idx = 0; idx < i->getNumResults(); ++idx) {
+      Explosion output;
+      projectTupleElementFromExplosion(*this,
+                                       baseType,
+                                       fullTuple,
+                                       idx,
+                                       output);
+      setLoweredExplosion(i->getResult(idx), output);
+    }
+    
+    // Claim all elements from the input tuple explosion
+    (void)fullTuple.claimAll();
   }
   void visitDestructureStructInst(DestructureStructInst *i) {
-    llvm_unreachable("unimplemented");
+    Explosion fullStruct = getLoweredExplosion(i->getOperand());
+    SILType baseType = i->getOperand()->getType();
+    
+    // Get the struct declaration and its stored properties
+    auto structType = baseType.getStructOrBoundGenericStruct();
+    assert(structType && "Expected struct type");
+    auto storedProps = structType->getStoredProperties();
+    
+    // For each result of the destructure instruction, project the corresponding struct field
+    for (unsigned idx = 0; idx < i->getNumResults(); ++idx) {
+      Explosion output;
+      assert(idx < storedProps.size() && "Index out of bounds");
+      VarDecl *field = storedProps[idx];
+      projectPhysicalStructMemberFromExplosion(*this,
+                                               baseType,
+                                               fullStruct,
+                                               field,
+                                               output);
+      setLoweredExplosion(i->getResult(idx), output);
+    }
+    
+    // Claim all elements from the input struct explosion
+    (void)fullStruct.claimAll();
   }
   void visitTupleElementAddrInst(TupleElementAddrInst *i);
   void visitStructExtractInst(StructExtractInst *i);
