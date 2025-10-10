@@ -50,6 +50,10 @@
 #include "swift/ABI/ValueWitnessTable.h"
 #include "swift/Demangling/Demangle.h"
 
+// C standard library for direct I/O
+#include <cstdio>
+#include <cstring>
+
 // LLVM includes for JIT functionality
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
@@ -137,13 +141,10 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     initializeLLVMTargetsOnce();
     
     // Verify target registration
-    auto targetTriple = llvm::Triple("x86_64-unknown-linux-gnu");
+    auto targetTriple = llvm::Triple(TARGET_TRIPLE);
     
     std::string targetError;
     auto target = llvm::TargetRegistry::lookupTarget(targetTriple.str(), targetError);
-    if (!target) {
-        // Target not found
-    }
     
     // Note: Swift runtime loading is handled internally by the CompilerInstance
     // when we call performSema() or other Swift compiler functions
@@ -175,6 +176,21 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     
     // Store the CompilerInstance for later use
     this->compilerInstance = std::move(compilerInstance);
+    
+    // Load Foundation module to enable file I/O operations
+    auto foundationModule = sharedASTContext->getModuleByName("Foundation");
+    if (!foundationModule) {
+        // Try to load Foundation module if it's not already loaded
+        foundationModule = sharedASTContext->getModuleByName("Foundation");
+    }
+    
+    // Debug: List all available modules
+    auto loadedModules = sharedASTContext->getLoadedModules();
+    llvm::errs() << "[SwiftInterpreter] Available modules: ";
+    for (const auto& [name, module] : loadedModules) {
+        llvm::errs() << name.str() << " ";
+    }
+    llvm::errs() << "\n";
     
     // Note: Access level override removed due to API compatibility issues
     // The multi-module approach with explicit imports should handle cross-module access
@@ -209,6 +225,24 @@ SwiftInterpreter::~SwiftInterpreter() = default;
 void SwiftInterpreter::markUserCodeStart() {
     assert(!InitPTUSize && "We only do this once");
     InitPTUSize = IncrParser->getPTUs().size();
+}
+
+// Custom print function that bypasses Swift runtime I/O issues
+extern "C" void swift_jit_print_string(const char* str) {
+    if (str) {
+        printf("%s", str);
+        fflush(stdout);
+    }
+}
+
+extern "C" void swift_jit_print_int(int64_t value) {
+    printf("%lld", (long long)value);
+    fflush(stdout);
+}
+
+extern "C" void swift_jit_print_double(double value) {
+    printf("%.6g", value);
+    fflush(stdout);
 }
 
 size_t SwiftInterpreter::getEffectivePTUSize() const {

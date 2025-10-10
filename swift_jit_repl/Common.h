@@ -63,6 +63,15 @@ namespace swift {
 namespace SwiftJITREPL {
 
 /**
+ * Target triple for the Swift JIT REPL
+ * This is defined at compile time by CMake based on the host machine
+ */
+#ifndef SWIFT_TARGET_TRIPLE
+#error "SWIFT_TARGET_TRIPLE must be defined at compile time"
+#endif
+constexpr const char* TARGET_TRIPLE = SWIFT_TARGET_TRIPLE;
+
+/**
  * Result of evaluating a Swift expression
  */
 struct EvaluationResult {

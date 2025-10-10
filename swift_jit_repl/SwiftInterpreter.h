@@ -54,6 +54,11 @@ public:
     // Mark the start of user code (separates runtime code from user code)
     void markUserCodeStart();
     
+    // Custom print functions for JIT environment
+    static void swift_jit_print_string(const char* str);
+    static void swift_jit_print_int(int64_t value);
+    static void swift_jit_print_double(double value);
+    
     // Get the effective PTU size (excluding runtime PTUs)
     size_t getEffectivePTUSize() const;
     

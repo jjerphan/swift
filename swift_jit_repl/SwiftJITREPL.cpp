@@ -223,8 +223,8 @@ private:
             // We only need the CompilerInvocation, not the full CompilerInstance
             
             // Set up language options for JIT mode
-            compilerInvocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
-            compilerInvocation.getLangOptions().EnableObjCInterop = false;
+            compilerInvocation.getLangOptions().Target = llvm::Triple(TARGET_TRIPLE);
+            compilerInvocation.getLangOptions().EnableObjCInterop = true;
             
             // Set up frontend options for SIL generation (to generate SIL functions)
             compilerInvocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
@@ -232,7 +232,7 @@ private:
             // Set the correct search paths for Swift standard library using compile time values
             auto &searchPaths = compilerInvocation.getSearchPathOptions();
             searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
-            searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+            searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2, FOUNDATION_MODULE_PATH, FOUNDATION_STATIC_MODULE_PATH, DISPATCH_MODULE_PATH, DISPATCH_STATIC_MODULE_PATH});
             searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
             searchPaths.setSDKPath(SWIFT_SDK_PATH);
             
@@ -258,6 +258,15 @@ private:
             if (config.generate_debug_info) {
                 compilerInvocation.getIRGenOptions().DebugInfoFormat = swift::IRGenDebugInfoFormat::DWARF;
             }
+            
+            // Configure ClangImporter to find system C headers
+            auto &clangImporterOpts = compilerInvocation.getClangImporterOptions();
+            clangImporterOpts.clangPath = "/usr/bin/clang";  // Use system clang directly
+            clangImporterOpts.ModuleCachePath = "/tmp/swift-jit-module-cache";  // Set module cache path
+            clangImporterOpts.ExtraArgs = {
+                "-I/usr/include",  // Basic system include directory
+                "-isystem", "/usr/include",  // System headers
+            };
             
             // Record the actual module name used
             currentModuleName = moduleName;
@@ -480,8 +489,8 @@ bool SwiftJITREPL::isAvailable() {
         swift::CompilerInvocation invocation;
         
         // Set up language options for JIT mode
-        invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
-        invocation.getLangOptions().EnableObjCInterop = false;
+        invocation.getLangOptions().Target = llvm::Triple(TARGET_TRIPLE);
+        invocation.getLangOptions().EnableObjCInterop = true;
         
         // Set up frontend options for SIL generation (to generate SIL functions)
         invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
@@ -505,7 +514,7 @@ bool SwiftJITREPL::isAvailable() {
         // Set the correct search paths for Swift standard library using compile time values
         auto &searchPaths = invocation.getSearchPathOptions();
         searchPaths.RuntimeLibraryPaths = {SWIFT_RUNTIME_LIBRARY_PATHS};
-        searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2});
+        searchPaths.setRuntimeLibraryImportPaths({SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1, SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2, FOUNDATION_MODULE_PATH, FOUNDATION_STATIC_MODULE_PATH, DISPATCH_MODULE_PATH, DISPATCH_STATIC_MODULE_PATH});
         searchPaths.RuntimeResourcePath = SWIFT_RUNTIME_RESOURCE_PATH;
         searchPaths.setSDKPath(SWIFT_SDK_PATH);
         

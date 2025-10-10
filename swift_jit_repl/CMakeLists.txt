@@ -42,6 +42,39 @@ set(SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2 "${SWIFT_BUILD_SWIFT}/lib/swift/linux/x
 set(SWIFT_RUNTIME_RESOURCE_PATH "${SWIFT_BUILD_SWIFT}/lib/swift")
 set(SWIFT_SDK_PATH "${SWIFT_BUILD_SWIFT}")
 
+# Define Foundation module paths
+set(FOUNDATION_MODULE_PATH "${SWIFT_BUILD_DIR}/foundation-linux-x86_64/swift")
+set(FOUNDATION_STATIC_MODULE_PATH "${SWIFT_BUILD_DIR}/foundation_static-linux-x86_64/swift")
+set(DISPATCH_MODULE_PATH "${SWIFT_BUILD_DIR}/libdispatch-linux-x86_64/src/swift/swift")
+set(DISPATCH_STATIC_MODULE_PATH "${SWIFT_BUILD_DIR}/libdispatch_static-linux-x86_64/src/swift/swift")
+
+# Detect target triple at compile time
+# Construct target triple from system information
+# We assume that the target triple is the same as the host triple.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(TARGET_ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    set(TARGET_ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7")
+    set(TARGET_ARCH "arm")
+else()
+    set(TARGET_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(TARGET_OS "linux-gnu")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(TARGET_OS "apple-darwin")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(TARGET_OS "windows-msvc")
+else()
+    set(TARGET_OS "${CMAKE_SYSTEM_NAME}")
+endif()
+
+set(SWIFT_TARGET_TRIPLE "${TARGET_ARCH}-${TARGET_OS}")
+
+message(STATUS "Detected Swift target triple: ${SWIFT_TARGET_TRIPLE}")
+
 # Add compile definitions for Swift search paths
 add_compile_definitions(
     SWIFT_RUNTIME_LIBRARY_PATHS="${SWIFT_RUNTIME_LIBRARY_PATHS}"
@@ -49,6 +82,11 @@ add_compile_definitions(
     SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2="${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2}"
     SWIFT_RUNTIME_RESOURCE_PATH="${SWIFT_RUNTIME_RESOURCE_PATH}"
     SWIFT_SDK_PATH="${SWIFT_SDK_PATH}"
+    FOUNDATION_MODULE_PATH="${FOUNDATION_MODULE_PATH}"
+    FOUNDATION_STATIC_MODULE_PATH="${FOUNDATION_STATIC_MODULE_PATH}"
+    DISPATCH_MODULE_PATH="${DISPATCH_MODULE_PATH}"
+    DISPATCH_STATIC_MODULE_PATH="${DISPATCH_STATIC_MODULE_PATH}"
+    SWIFT_TARGET_TRIPLE="${SWIFT_TARGET_TRIPLE}"
 )
 
 # Find Swift compiler in the built Swift directory
@@ -152,6 +190,12 @@ else()
     set(SWIFT_IMPORT_PATHS "${SWIFT_BUILD_SWIFT}/lib/swift/linux" "${SWIFT_BUILD_SWIFT}/lib/swift/linux/x86_64")
     set(SWIFT_RESOURCE_PATH "${SWIFT_BUILD_SWIFT}/lib/swift")
 endif()
+
+# Add Foundation paths to import paths
+list(APPEND SWIFT_IMPORT_PATHS "${FOUNDATION_MODULE_PATH}" "${FOUNDATION_STATIC_MODULE_PATH}")
+
+message(STATUS "Added Foundation module paths: ${FOUNDATION_MODULE_PATH}, ${FOUNDATION_STATIC_MODULE_PATH}")
+message(STATUS "Final Swift import paths: ${SWIFT_IMPORT_PATHS}")
 
 # Clean up temporary file
 file(REMOVE "${CMAKE_BINARY_DIR}/swift_target_info.json")
@@ -365,7 +409,7 @@ string(REPLACE " " ";" LLVM_LDFLAGS "${LLVM_LDFLAGS_RAW}")
 string(REPLACE " " ";" SWIFT_SYSTEM_LIBRARIES "${SWIFT_SYSTEM_LIBRARIES_RAW}")
 
 # Add additional system libraries
-list(APPEND SWIFT_SYSTEM_LIBRARIES "uuid" "edit")
+list(APPEND SWIFT_SYSTEM_LIBRARIES "uuid" "edit" "pthread" "dl" "m" "c")
 
 # Create the main library
 add_library(SwiftJITREPL SHARED
@@ -593,6 +637,7 @@ target_include_directories(swift_jit_test PRIVATE
     ${CLANG_SOURCE_DIR}/include
     ${LLVM_SOURCE_DIR}/include
     ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+    /usr/include/llvm-gtest
 )
 
 # Add LLVM C++ flags but override exception handling
@@ -616,6 +661,8 @@ target_link_libraries(swift_jit_test PRIVATE
     ${LLVM_LDFLAGS}
     ${SWIFT_SYSTEM_LIBRARIES}
     ${ADDITIONAL_LIBRARIES}
+    llvm_gtest
+    llvm_gtest_main
 )
 
 # Set output directories

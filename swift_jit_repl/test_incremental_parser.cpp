@@ -224,6 +224,17 @@ TEST_F(SwiftIncrementalParserTest, StringLiteral) {
     verifyMainFunction(ptu.TheModule.get());
 }
 
+// Test simple print parsing
+TEST_F(SwiftIncrementalParserTest, PrintHelloWorld) {
+    auto ptuOrError = parser->parse("print(\"Hello, World!\")");
+    ASSERT_FALSE(ptuOrError.takeError()) << "Failed to parse print(\"Hello, World!\")";
+
+    auto& ptu = ptuOrError.get();
+    ASSERT_NE(ptu.TheModule.get(), nullptr) << "Should generate LLVM module";
+    verifyModule(ptu.TheModule.get());
+    verifyMainFunction(ptu.TheModule.get());
+}
+
 // Test module structure validation
 TEST_F(SwiftIncrementalParserTest, ModuleStructure) {
     auto ptuOrError = parser->parse("let x = 42; let y = x + 1");

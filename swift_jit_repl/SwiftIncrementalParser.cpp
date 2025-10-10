@@ -110,8 +110,8 @@ static std::unique_ptr<llvm::Module> lowerSwiftCodeToLLVMModule(swift::ModuleDec
 
     // Create a minimal CompilerInvocation for IR generation
     swift::CompilerInvocation invocation;
-    invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
-    invocation.getLangOptions().EnableObjCInterop = false;
+    invocation.getLangOptions().Target = llvm::Triple(TARGET_TRIPLE);
+    invocation.getLangOptions().EnableObjCInterop = true;
     invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::EmitSILGen;
     invocation.getFrontendOptions().ModuleName = module->getName().str();
     invocation.getSILOptions().OptMode = swift::OptimizationMode::NoOptimization;
@@ -200,8 +200,10 @@ llvm::Expected<SwiftPartialTranslationUnit&> SwiftIncrementalParser::parse(llvm:
     sharedASTContext->Diags.resetHadAnyError();
     
     // Create a single module with all accumulated code
-    std::string moduleName = "SwiftJITREPL_Accumulated";
-    swift::ImplicitImportInfo importInfo;
+    // Ensure a unique module name for each parse to avoid collisions
+    auto nowCount = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::string moduleName = std::string("SwiftJITREPL_Accumulated_") + std::to_string(nowCount);
+    swift::ImplicitImportInfo importInfo = createImplicitImports();
     
     auto accumulatedModule = swift::ModuleDecl::createMainModule(
         *sharedASTContext,
@@ -366,6 +368,73 @@ std::string SwiftIncrementalParser::accumulateAllCode(const std::string& newInpu
     // Add Swift import only once at the beginning
     accumulated << "import Swift\n";
     
+    // Add custom print functions that bypass Swift runtime I/O issues
+    accumulated << R"(
+// Custom print functions for JIT environment - direct C function calls
+@_cdecl("swift_jit_print_string")
+func swift_jit_print_string(_ str: UnsafePointer<CChar>?) {
+    // This will be implemented in C++ to call printf directly
+}
+
+@_cdecl("swift_jit_print_int") 
+func swift_jit_print_int(_ value: Int64) {
+    // This will be implemented in C++ to call printf directly
+}
+
+@_cdecl("swift_jit_print_double")
+func swift_jit_print_double(_ value: Double) {
+    // This will be implemented in C++ to call printf directly
+}
+
+// Custom print implementation that uses our C++ functions
+func customPrint(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+    for (index, item) in items.enumerated() {
+        if index > 0 {
+            customPrint(separator, terminator: "")
+        }
+        customPrint(item, terminator: "")
+    }
+    customPrint(terminator, terminator: "")
+}
+
+func customPrint<T>(_ item: T, terminator: String = "\n") {
+    switch item {
+    case let str as String:
+        str.withCString { cStr in
+            swift_jit_print_string(cStr)
+        }
+    case let int as Int:
+        swift_jit_print_int(Int64(int))
+    case let int64 as Int64:
+        swift_jit_print_int(int64)
+    case let double as Double:
+        swift_jit_print_double(double)
+    case let float as Float:
+        swift_jit_print_double(Double(float))
+    default:
+        let str = String(describing: item)
+        str.withCString { cStr in
+            swift_jit_print_string(cStr)
+        }
+    }
+    if terminator != "" {
+        terminator.withCString { cStr in
+            swift_jit_print_string(cStr)
+        }
+    }
+}
+
+// Override the standard print function
+func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+    customPrint(items, separator: separator, terminator: terminator)
+}
+
+func print<T>(_ item: T, terminator: String = "\n") {
+    customPrint(item, terminator: terminator)
+}
+
+)" << std::endl;
+    
     // Add all previous inputs, but skip the import statements to avoid duplicates
     for (const auto& ptu : PTUs) {
         if (!ptu.InputCode.empty()) {
@@ -405,6 +474,23 @@ swift::ImplicitImportInfo SwiftIncrementalParser::createImplicitImports() {
     for (const auto& module : *modules) {
         importInfo.AdditionalImports.emplace_back(
             swift::ImportedModule(module));
+    }
+    
+    // Add Foundation module import to enable file I/O operations
+    auto foundationModule = sharedASTContext->getModuleByName("Foundation");
+    if (foundationModule && !foundationModule->failedToLoad()) {
+        importInfo.AdditionalImports.emplace_back(
+            swift::ImportedModule(foundationModule));
+        llvm::errs() << "[SwiftIncrementalParser] Foundation module loaded successfully\n";
+    } else {
+        llvm::errs() << "[SwiftIncrementalParser] Foundation module not available\n";
+        // List available modules for debugging
+        auto loadedModules = sharedASTContext->getLoadedModules();
+        llvm::errs() << "[SwiftIncrementalParser] Available modules: ";
+        for (const auto& [name, module] : loadedModules) {
+            llvm::errs() << name.str() << " ";
+        }
+        llvm::errs() << "\n";
     }
     
     return importInfo;
