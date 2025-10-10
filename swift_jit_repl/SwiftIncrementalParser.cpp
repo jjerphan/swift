@@ -86,16 +86,6 @@
 
 namespace SwiftJITREPL {
 
-// Forward declaration - function is defined in SwiftJITREPL.cpp
-extern void initializeLLVMTargetsOnce();
-
-/**
- * Helper function to validate Swift identifiers
- */
-static bool isValidSwiftIdentifier(const std::string& identifier) {
-    return swift::Lexer::isIdentifier(identifier);
-}
-
 /**
  * Lower Swift code to LLVM IR using Swift's built-in utilities
  * This uses the same pipeline as Swift's immediate mode
@@ -367,73 +357,6 @@ std::string SwiftIncrementalParser::accumulateAllCode(const std::string& newInpu
     
     // Add Swift import only once at the beginning
     accumulated << "import Swift\n";
-    
-    // Add custom print functions that bypass Swift runtime I/O issues
-    accumulated << R"(
-// Custom print functions for JIT environment - direct C function calls
-@_cdecl("swift_jit_print_string")
-func swift_jit_print_string(_ str: UnsafePointer<CChar>?) {
-    // This will be implemented in C++ to call printf directly
-}
-
-@_cdecl("swift_jit_print_int") 
-func swift_jit_print_int(_ value: Int64) {
-    // This will be implemented in C++ to call printf directly
-}
-
-@_cdecl("swift_jit_print_double")
-func swift_jit_print_double(_ value: Double) {
-    // This will be implemented in C++ to call printf directly
-}
-
-// Custom print implementation that uses our C++ functions
-func customPrint(_ items: Any..., separator: String = " ", terminator: String = "\n") {
-    for (index, item) in items.enumerated() {
-        if index > 0 {
-            customPrint(separator, terminator: "")
-        }
-        customPrint(item, terminator: "")
-    }
-    customPrint(terminator, terminator: "")
-}
-
-func customPrint<T>(_ item: T, terminator: String = "\n") {
-    switch item {
-    case let str as String:
-        str.withCString { cStr in
-            swift_jit_print_string(cStr)
-        }
-    case let int as Int:
-        swift_jit_print_int(Int64(int))
-    case let int64 as Int64:
-        swift_jit_print_int(int64)
-    case let double as Double:
-        swift_jit_print_double(double)
-    case let float as Float:
-        swift_jit_print_double(Double(float))
-    default:
-        let str = String(describing: item)
-        str.withCString { cStr in
-            swift_jit_print_string(cStr)
-        }
-    }
-    if terminator != "" {
-        terminator.withCString { cStr in
-            swift_jit_print_string(cStr)
-        }
-    }
-}
-
-// Override the standard print function
-func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
-    customPrint(items, separator: separator, terminator: terminator)
-}
-
-func print<T>(_ item: T, terminator: String = "\n") {
-    customPrint(item, terminator: terminator)
-}
-
-)" << std::endl;
     
     // Add all previous inputs, but skip the import statements to avoid duplicates
     for (const auto& ptu : PTUs) {

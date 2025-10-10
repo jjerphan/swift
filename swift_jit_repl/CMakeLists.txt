@@ -62,7 +62,7 @@ else()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(TARGET_OS "linux-gnu")
+    set(TARGET_OS "unknown-linux-gnu")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(TARGET_OS "apple-darwin")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")

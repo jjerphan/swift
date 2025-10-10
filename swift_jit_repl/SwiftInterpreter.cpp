@@ -56,6 +56,7 @@
 
 // LLVM includes for JIT functionality
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/Support/TargetSelect.h"
@@ -85,6 +86,9 @@ public:
 private:
     std::string transformForValuePrinting(const std::string& code) {
         // Add Swift import to make standard library operators available
+
+        // For now it is quite simple but in the future we might need to
+        // use a more sophisticated approach like for Clang's Interpreter.
         std::string result = "import Swift\n" + code;
         
         return result;
@@ -96,46 +100,9 @@ extern bool g_llvmTargetsInitialized;
 extern std::mutex g_llvmInitMutex;
 extern void initializeLLVMTargetsOnce();
 
-// Function to validate Swift runtime paths at compile time and runtime
-static void validateSwiftRuntimePaths() {
-    
-    // Runtime validation
-    std::vector<std::string> pathsToCheck = {
-        SWIFT_RUNTIME_LIBRARY_PATHS,
-        SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1,
-        SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2,
-        SWIFT_RUNTIME_RESOURCE_PATH,
-        SWIFT_SDK_PATH
-    };
-    
-    std::vector<std::string> pathNames = {
-        "SWIFT_RUNTIME_LIBRARY_PATHS",
-        "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1", 
-        "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2",
-        "SWIFT_RUNTIME_RESOURCE_PATH",
-        "SWIFT_SDK_PATH"
-    };
-    
-    bool allPathsValid = true;
-    for (size_t i = 0; i < pathsToCheck.size(); ++i) {
-        // Use access() system call for path validation (more portable than std::filesystem)
-        if (access(pathsToCheck[i].c_str(), F_OK) != 0) {
-            allPathsValid = false;
-        }
-    }
-    
-    if (!allPathsValid) {
-        // Some Swift runtime paths are invalid. This may cause runtime crashes.
-        // Please ensure the Swift runtime is properly installed and paths are correctly configured.
-    }
-}
-
 SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     // Store reference to compiler invocation
     sharedCompilerInvocation = invocation;
-    
-    // Validate Swift runtime paths
-    validateSwiftRuntimePaths();
     
     // Initialize LLVM targets manually (equivalent to INITIALIZE_LLVM macro) - only once
     initializeLLVMTargetsOnce();
@@ -206,8 +173,32 @@ SwiftInterpreter::SwiftInterpreter(swift::CompilerInvocation* invocation) {
     // Create incremental parser with shared ASTContext and modules
     IncrParser = std::make_unique<SwiftIncrementalParser>(sharedASTContext.get(), &modules, TSCtx.get(), this->compilerInstance.get(), sharedCompilerInvocation);
     
-    // Create JIT builder
+    // Create JIT builder with complete JITDylib configuration
     auto jitBuilder = llvm::orc::LLJITBuilder();
+    
+    // Configure JIT target machine builder
+    jitBuilder.setJITTargetMachineBuilder(llvm::orc::JITTargetMachineBuilder(targetTriple));
+    
+    // Set up process symbols for I/O functions (printf, puts, etc.)
+    jitBuilder.setProcessSymbolsJITDylibSetup([](llvm::orc::LLJIT &J) -> llvm::Expected<llvm::orc::JITDylibSP> {
+        auto &ES = J.getExecutionSession();
+        auto &ProcessSymbolsJD = ES.createBareJITDylib("<Process Symbols>");
+        
+        // Create dynamic library search generator for the target process
+        auto ProcessSymbolsGenerator = llvm::orc::EPCDynamicLibrarySearchGenerator::GetForTargetProcess(ES);
+        if (!ProcessSymbolsGenerator) {
+            return ProcessSymbolsGenerator.takeError();
+        }
+        
+        // Add the generator to the process symbols JIT dylib
+        ProcessSymbolsJD.addGenerator(std::move(*ProcessSymbolsGenerator));
+        
+        return &ProcessSymbolsJD;
+    });
+    
+    // Enable linking process symbols by default (required for I/O functions)
+    jitBuilder.setLinkProcessSymbolsByDefault(true);
+    
     auto jitOrError = jitBuilder.create();
     if (!jitOrError) {
         return;
@@ -225,24 +216,6 @@ SwiftInterpreter::~SwiftInterpreter() = default;
 void SwiftInterpreter::markUserCodeStart() {
     assert(!InitPTUSize && "We only do this once");
     InitPTUSize = IncrParser->getPTUs().size();
-}
-
-// Custom print function that bypasses Swift runtime I/O issues
-extern "C" void swift_jit_print_string(const char* str) {
-    if (str) {
-        printf("%s", str);
-        fflush(stdout);
-    }
-}
-
-extern "C" void swift_jit_print_int(int64_t value) {
-    printf("%lld", (long long)value);
-    fflush(stdout);
-}
-
-extern "C" void swift_jit_print_double(double value) {
-    printf("%.6g", value);
-    fflush(stdout);
 }
 
 size_t SwiftInterpreter::getEffectivePTUSize() const {

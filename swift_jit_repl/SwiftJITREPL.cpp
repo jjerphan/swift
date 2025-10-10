@@ -296,9 +296,16 @@ private:
             clangImporterOpts.clangPath = "/usr/bin/clang";  // Use system clang directly
             clangImporterOpts.ModuleCachePath = "/tmp/swift-jit-module-cache";  // Set module cache path
             clangImporterOpts.ExtraArgs = {
-                "-I/usr/include",  // Basic system include directory
-                "-isystem", "/usr/include",  // System headers
+                "-I/usr/bin/../lib/clang/20/include",  // Clang built-in headers
+                "-I/usr/local/include",                // Local include directory
+                "-I/usr/include",                      // System include directory
+                "-isystem", "/usr/local/include",      // System headers
+                "-isystem", "/usr/include",            // System headers
             };
+            
+            // Configure search paths to help ClangImporter find system headers
+            auto &searchPathOpts = compilerInvocation.getSearchPathOptions();
+            searchPathOpts.setSDKPath("/usr");  // Set SDK path to system root
             
             // Record the actual module name used
             currentModuleName = moduleName;

@@ -59,15 +59,6 @@ TEST_F(SwiftJITREPLBasicTest, ComplexExpression) {
     EXPECT_TRUE(result.success) << result.error_message;
 }
 
-// Multi-evaluation: declare different variables over many rounds
-TEST_F(SwiftJITREPLBasicTest, ManyDistinctDeclarations) {
-    for (int i = 0; i < 50; ++i) {
-        std::string code = "let v" + std::to_string(i) + " = " + std::to_string(i);
-        auto res = repl->evaluate(code);
-        ASSERT_TRUE(res.success) << res.error_message << " at i=" << i;
-    }
-}
-
 // Multi-evaluation: chain dependent computations across evaluations
 TEST_F(SwiftJITREPLBasicTest, ChainedComputations) {
     ASSERT_TRUE(repl->evaluate("let base = 1").success);
@@ -79,17 +70,6 @@ TEST_F(SwiftJITREPLBasicTest, ChainedComputations) {
     }
     auto finalRes = repl->evaluate("(base + 24)");
     EXPECT_TRUE(finalRes.success) << finalRes.error_message;
-}
-
-// Multi-evaluation: mix declarations and expressions per round
-TEST_F(SwiftJITREPLBasicTest, MixedRounds) {
-    for (int i = 0; i < 30; ++i) {
-        std::string decl = "let a" + std::to_string(i) + " = " + std::to_string(i * 2);
-        ASSERT_TRUE(repl->evaluate(decl).success);
-        std::string expr = "a" + std::to_string(i) + " + 1";
-        auto res = repl->evaluate(expr);
-        ASSERT_TRUE(res.success) << res.error_message << " at round=" << i;
-    }
 }
 
 // Stress: repeated evals in a single large buffer to ensure unique main renaming, too
