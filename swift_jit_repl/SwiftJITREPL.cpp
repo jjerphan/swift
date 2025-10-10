@@ -414,32 +414,6 @@ public:
     SwiftJITREPL::CompilationStats getStats() const {
         return stats;
     }
-    
-    std::vector<EvaluationResult> evaluateMultiple(const std::vector<std::string>& expressions) {
-        if (!initialized) {
-            return std::vector<EvaluationResult>(expressions.size(), EvaluationResult("REPL not initialized"));
-        }
-        
-        std::vector<EvaluationResult> results;
-        results.reserve(expressions.size());
-        
-        // For multiple expressions, we'll evaluate each one individually
-        // Stop on first failure to avoid cascading errors
-        for (const auto& expr : expressions) {
-            auto result = evaluate(expr);
-            results.push_back(result);
-            
-            if (!result.success) {
-                // Fill remaining results with failure
-                while (results.size() < expressions.size()) {
-                    results.push_back(EvaluationResult("Stopped due to previous failure"));
-                }
-                break;
-            }
-        }
-        
-        return results;
-    }
 };
 
 // Static member initialization
@@ -489,10 +463,6 @@ llvm::Error SwiftJITREPL::undo(unsigned N) {
     }
     
     return pImpl->interpreter->undo(N);
-}
-
-std::vector<EvaluationResult> SwiftJITREPL::evaluateMultiple(const std::vector<std::string>& expressions) {
-    return pImpl->evaluateMultiple(expressions);
 }
 
 bool SwiftJITREPL::reset() {

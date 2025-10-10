@@ -50,13 +50,6 @@ public:
     llvm::Error undo(unsigned N);
     
     /**
-     * Evaluate multiple Swift expressions in sequence
-     * @param expressions Vector of expressions to evaluate
-     * @return Vector of results corresponding to each expression
-     */
-    std::vector<EvaluationResult> evaluateMultiple(const std::vector<std::string>& expressions);
-
-    /**
      * Reset the REPL context (clears all compiled code and state)
      * @return true if reset was successful
      */
