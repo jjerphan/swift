@@ -1,5 +1,9 @@
 #include "SwiftJITREPL.h"
 
+// Standard library includes for error handling
+#include <iostream>
+#include <cstdlib>
+
 // Evaluator debugging APIs are not exposed; cycle dumps are enabled via LangOptions
 #include "swift/Frontend/PrintingDiagnosticConsumer.h"
 
@@ -86,7 +90,11 @@ static void validateSwiftRuntimePaths() {
         SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1,
         SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2,
         SWIFT_RUNTIME_RESOURCE_PATH,
-        SWIFT_SDK_PATH
+        SWIFT_SDK_PATH,
+        FOUNDATION_MODULE_PATH,
+        FOUNDATION_STATIC_MODULE_PATH,
+        DISPATCH_MODULE_PATH,
+        DISPATCH_STATIC_MODULE_PATH
     };
     
     std::vector<std::string> pathNames = {
@@ -94,20 +102,44 @@ static void validateSwiftRuntimePaths() {
         "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1", 
         "SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2",
         "SWIFT_RUNTIME_RESOURCE_PATH",
-        "SWIFT_SDK_PATH"
+        "SWIFT_SDK_PATH",
+        "FOUNDATION_MODULE_PATH",
+        "FOUNDATION_STATIC_MODULE_PATH",
+        "DISPATCH_MODULE_PATH",
+        "DISPATCH_STATIC_MODULE_PATH"
     };
     
     bool allPathsValid = true;
+    std::vector<std::string> invalidPaths;
+    std::vector<std::string> invalidPathNames;
+    
     for (size_t i = 0; i < pathsToCheck.size(); ++i) {
         // Use access() system call for path validation (more portable than std::filesystem)
         if (access(pathsToCheck[i].c_str(), F_OK) != 0) {
             allPathsValid = false;
+            invalidPaths.push_back(pathsToCheck[i]);
+            invalidPathNames.push_back(pathNames[i]);
         }
     }
     
     if (!allPathsValid) {
-        // Some Swift runtime paths are invalid. This may cause runtime crashes.
-        // Please ensure the Swift runtime is properly installed and paths are correctly configured.
+        std::cerr << "ERROR: Invalid Swift runtime paths detected!\n";
+        std::cerr << "The following Swift runtime paths are missing or inaccessible:\n\n";
+        
+        for (size_t i = 0; i < invalidPaths.size(); ++i) {
+            std::cerr << "  " << invalidPathNames[i] << ": " << invalidPaths[i] << "\n";
+        }
+        
+        std::cerr << "\nThis will cause runtime crashes. Please ensure:\n";
+        std::cerr << "1. Swift is properly built and installed\n";
+        std::cerr << "2. The Swift build directory exists and contains all runtime libraries\n";
+        std::cerr << "3. All required Swift runtime libraries are present\n";
+        std::cerr << "4. You have read permissions for the Swift runtime directories\n\n";
+        std::cerr << "Build the Swift project first with: ./utils/build-script --release\n";
+        std::cerr << "Then rebuild this project with: ./build.sh\n\n";
+        
+        std::cerr << "Exiting due to invalid runtime paths.\n";
+        std::exit(1);
     }
 }
 

@@ -75,6 +75,50 @@ set(SWIFT_TARGET_TRIPLE "${TARGET_ARCH}-${TARGET_OS}")
 
 message(STATUS "Detected Swift target triple: ${SWIFT_TARGET_TRIPLE}")
 
+# Validate Swift runtime paths at build time
+message(STATUS "Validating Swift runtime paths...")
+
+# Check Swift runtime paths
+if(NOT EXISTS "${SWIFT_RUNTIME_LIBRARY_PATHS}")
+    message(FATAL_ERROR "Swift runtime library path does not exist: ${SWIFT_RUNTIME_LIBRARY_PATHS}")
+endif()
+
+if(NOT EXISTS "${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1}")
+    message(FATAL_ERROR "Swift runtime library import path 1 does not exist: ${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_1}")
+endif()
+
+if(NOT EXISTS "${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2}")
+    message(FATAL_ERROR "Swift runtime library import path 2 does not exist: ${SWIFT_RUNTIME_LIBRARY_IMPORT_PATHS_2}")
+endif()
+
+if(NOT EXISTS "${SWIFT_RUNTIME_RESOURCE_PATH}")
+    message(FATAL_ERROR "Swift runtime resource path does not exist: ${SWIFT_RUNTIME_RESOURCE_PATH}")
+endif()
+
+if(NOT EXISTS "${SWIFT_SDK_PATH}")
+    message(FATAL_ERROR "Swift SDK path does not exist: ${SWIFT_SDK_PATH}")
+endif()
+
+# Check Foundation module paths
+if(NOT EXISTS "${FOUNDATION_MODULE_PATH}")
+    message(FATAL_ERROR "Foundation module path does not exist: ${FOUNDATION_MODULE_PATH}")
+endif()
+
+if(NOT EXISTS "${FOUNDATION_STATIC_MODULE_PATH}")
+    message(FATAL_ERROR "Foundation static module path does not exist: ${FOUNDATION_STATIC_MODULE_PATH}")
+endif()
+
+# Check Dispatch module paths
+if(NOT EXISTS "${DISPATCH_MODULE_PATH}")
+    message(FATAL_ERROR "Dispatch module path does not exist: ${DISPATCH_MODULE_PATH}")
+endif()
+
+if(NOT EXISTS "${DISPATCH_STATIC_MODULE_PATH}")
+    message(FATAL_ERROR "Dispatch static module path does not exist: ${DISPATCH_STATIC_MODULE_PATH}")
+endif()
+
+message(STATUS "All Swift runtime paths validated successfully")
+
 # Add compile definitions for Swift search paths
 add_compile_definitions(
     SWIFT_RUNTIME_LIBRARY_PATHS="${SWIFT_RUNTIME_LIBRARY_PATHS}"
