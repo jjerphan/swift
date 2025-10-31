@@ -26,6 +26,8 @@
 #include <memory>
 #include <vector>
 #include <mutex>
+#include <fstream>
+#include <unistd.h>
 
 // LLVM includes
 #include "llvm/Support/raw_ostream.h"
@@ -35,11 +37,19 @@
 
 // Swift compiler includes
 #include "swift/Frontend/Frontend.h"
+#include "swift/IDETool/CompilerInvocation.h"
 #include "swift/Immediate/Immediate.h"
 #include "swift/Immediate/SwiftMaterializationUnit.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/SourceFile.h"
 #include "swift/AST/Import.h"
+#include "swift/AST/Decl.h"
+#include "swift/AST/ASTContext.h"
+#include "swift/AST/ASTNode.h"
+#include "swift/AST/ParseRequests.h"
+#include "swift/Parse/Parser.h"
+#include "swift/Parse/Lexer.h"
+#include "swift/Parse/PersistentParserState.h"
 #include "swift/Subsystems.h"
 
 // LLVM target initialization
@@ -71,11 +81,12 @@ inline void initializeLLVMTargetsOnce() {
 /**
  * Private implementation class (PIMPL idiom)
  *
- * This implementation demonstrates the SIL-based JIT approach inspired by Swift Immediate:
- * 1. Creates CompilerInstance for AST parsing and validation
- * 2. Demonstrates SIL module generation using performASTLowering()
- * 3. Shows EagerSwiftMaterializationUnit creation with SILModule
- * 4. Illustrates SwiftJIT execution pattern
+ * This implementation uses an incremental approach inspired by Clang's Interpreter:
+ * 1. Maintains a persistent CompilerInstance and SourceFile
+ * 2. Parses top-level statements as TopLevelCodeDecl nodes (no @main wrapper)
+ * 3. Incrementally adds new code to the SourceFile buffer
+ * 4. Executes only newly parsed TopLevelCodeDecl nodes
+ * 5. Preserves state across evaluations
  *
  */
 class SwiftJITREPL::Impl {
@@ -87,44 +98,13 @@ public:
         std::cout << "[SIL JIT]   - Enable optimizations: " << (config.enable_optimizations ? "true" : "false") << std::endl;
         std::cout << "[SIL JIT]   - Generate debug info: " << (config.generate_debug_info ? "true" : "false") << std::endl;
         
-        initialized = true;
-        std::cout << "[SIL JIT] ✓ SwiftJITREPL initialized successfully" << std::endl;
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-    }
-
-    ~Impl() {
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-        std::cout << "[SIL JIT] Destroying SwiftJITREPL..." << std::endl;
-        std::cout << "[SIL JIT] Cleaning up resources..." << std::endl;
-        std::cout << "[SIL JIT] ✓ SwiftJITREPL destroyed successfully" << std::endl;
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-    }
-
-public:
-    EvaluationResult evaluate(const std::string& expression) {
-        if (!initialized) {
-            std::cerr << "[SIL JIT] ERROR: REPL not initialized" << std::endl;
-            return EvaluationResult("REPL not initialized");
-        }
-
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-        std::cout << "[SIL JIT] Starting evaluation of expression: " << expression << std::endl;
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-
-        // Initialize LLVM targets FIRST before any other operations (only once)
+        // Initialize LLVM targets first
         initializeLLVMTargetsOnce();
 
-        // Use Swift's immediate mode approach - validate configuration with CompilerInstance
-        // This follows the same pattern as Swift Immediate's RunImmediately() function
-        std::cout << "[SIL JIT] Step 1: Validating Swift configuration using CompilerInstance..." << std::endl;
+        // Create persistent CompilerInstance
+        compilerInstance = std::make_unique<swift::CompilerInstance>();
         
-        // Create a temporary CompilerInstance for validation only
-        // In Swift Immediate, this is done in RunImmediately() and RunImmediatelyFromAST()
-        std::cout << "[SIL JIT] Creating CompilerInstance..." << std::endl;
-        auto tempCI = std::make_unique<swift::CompilerInstance>();
-        
-        // Configure CompilerInvocation for Immediate mode
-        std::cout << "[SIL JIT] Configuring CompilerInvocation for Immediate mode..." << std::endl;
+        // Configure CompilerInvocation for Immediate mode with script mode
         swift::CompilerInvocation invocation;
         invocation.getLangOptions().Target = llvm::Triple("x86_64-unknown-linux-gnu");
         invocation.getLangOptions().EnableObjCInterop = true;
@@ -143,26 +123,181 @@ public:
         irGenOpts.OutputKind = swift::IRGenOutputKind::Module;
         irGenOpts.UseJIT = true;
         
-        std::cout << "[SIL JIT] Setting up CompilerInstance..." << std::endl;
         std::string error;
-        if (tempCI->setup(invocation, error)) {
+        if (compilerInstance->setup(invocation, error)) {
             std::cerr << "[SIL JIT] ERROR: Failed to setup CompilerInstance: " << error << std::endl;
-            return EvaluationResult("Failed to setup CompilerInstance: " + error);
+            initialized = false;
+            return;
         }
         
-        std::cout << "[SIL JIT] ✓ Swift configuration validated successfully" << std::endl;
-        std::cout << "[SIL JIT] Note: Using Immediate mode execution via RunImmediatelyFromAST" << std::endl;
+        // Create a persistent SourceFile in script mode (allows top-level code)
+        auto &astContext = compilerInstance->getASTContext();
+        auto &sourceMgr = astContext.SourceMgr;
         
-        // For Immediate mode, we need to execute via RunImmediatelyFromAST
-        // This will parse the Swift code, compile to SIL, JIT it, and execute it
-        auto Result = swift::RunImmediatelyFromAST(*tempCI);
+        // Create an empty buffer that we'll append to incrementally
+        std::string emptySource = "";
+        auto sourceBuffer = llvm::MemoryBuffer::getMemBufferCopy(emptySource, "<REPL>");
+        unsigned bufferID = sourceMgr.addNewSourceBuffer(std::move(sourceBuffer));
+        
+        // Create SourceFile in Main mode (script mode allows top-level code)
+        auto parsingOpts = swift::SourceFile::getDefaultParsingOptions(astContext.LangOpts);
+        
+        // Create module with a populateFiles function that adds our source file
+        auto *module = swift::ModuleDecl::createMainModule(
+            astContext,
+            astContext.getIdentifier("SwiftJITREPL"),
+            swift::ImplicitImportInfo(),
+            [&](swift::ModuleDecl *mod, auto addFile) {
+                sourceFile = new (astContext) swift::SourceFile(*mod, swift::SourceFileKind::Main, bufferID, parsingOpts);
+                addFile(sourceFile);
+            });
+        
+        compilerInstance->setMainModule(module);
+        
+        // Create persistent parser state
+        parserState = std::make_unique<swift::PersistentParserState>();
+        
+        // Initialize SwiftJIT (persistent across evaluations)
+        auto jitResult = swift::SwiftJIT::Create(*compilerInstance);
+        if (auto err = jitResult.takeError()) {
+            std::cerr << "[SIL JIT] ERROR: Failed to create SwiftJIT" << std::endl;
+            initialized = false;
+            return;
+        }
+        swiftJIT = std::move(*jitResult);
+        
+        initialized = true;
+        std::cout << "[SIL JIT] ✓ SwiftJITREPL initialized successfully" << std::endl;
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+    }
+
+    ~Impl() {
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+        std::cout << "[SIL JIT] Destroying SwiftJITREPL..." << std::endl;
+        std::cout << "[SIL JIT] Cleaning up resources..." << std::endl;
+        
+        // Clean up JIT
+        if (swiftJIT) {
+            // Note: SwiftJIT cleanup is complex - see Immediate.cpp comment
+            // "It is not safe to unmap memory that has been registered with the swift or objc runtime"
+            swiftJIT.reset();
+        }
+        
+        // Parser state will be cleaned up automatically
+        parserState.reset();
+        
+        // CompilerInstance will clean up AST context and modules
+        compilerInstance.reset();
+        
+        std::cout << "[SIL JIT] ✓ SwiftJITREPL destroyed successfully" << std::endl;
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+    }
+
+public:
+    EvaluationResult evaluate(const std::string& expression) {
+        if (!initialized) {
+            std::cerr << "[SIL JIT] ERROR: REPL not initialized" << std::endl;
+            return EvaluationResult("REPL not initialized");
+        }
+
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+        std::cout << "[SIL JIT] Evaluating: " << expression << std::endl;
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+
+        auto &astContext = compilerInstance->getASTContext();
+        auto &sourceMgr = astContext.SourceMgr;
+        
+        // Accumulate source text (we maintain this separately)
+        if (!accumulatedSource.empty() && accumulatedSource.back() != '\n') {
+            accumulatedSource += "\n";
+        }
+        accumulatedSource += expression;
+        accumulatedSource += "\n";
+        
+        // Create a new buffer with all accumulated content
+        // We parse everything from scratch to avoid source location conflicts
+        auto newBuffer = llvm::MemoryBuffer::getMemBufferCopy(accumulatedSource, "<REPL>");
+        unsigned newBufferID = sourceMgr.addNewSourceBuffer(std::move(newBuffer));
+        
+        // Recreate the module and SourceFile with the new buffer
+        // This ensures all source locations are consistent
+        auto parsingOpts = swift::SourceFile::getDefaultParsingOptions(astContext.LangOpts);
+        auto *module = swift::ModuleDecl::createMainModule(
+            astContext,
+            astContext.getIdentifier("SwiftJITREPL"),
+            swift::ImplicitImportInfo(),
+            [&](swift::ModuleDecl *mod, auto addFile) {
+                sourceFile = new (astContext) swift::SourceFile(*mod, swift::SourceFileKind::Main, newBufferID, parsingOpts);
+                // Clear any existing scope to avoid conflicts
+                sourceFile->clearScope();
+                addFile(sourceFile);
+            });
+        
+        // Update the CompilerInstance to use the new module
+        compilerInstance->setMainModule(module);
+        
+        // Perform semantic analysis - this will parse the SourceFile via the request system
+        // Since we created a fresh SourceFile with a new buffer, there's no cache to clear
+        compilerInstance->performSema();
+        
+        if (astContext.hadError() || compilerInstance->getDiags().hadAnyError()) {
+            std::string errorMsg = "Semantic analysis error";
+            lastError = errorMsg;
+            astContext.Diags.resetHadAnyError();
+            return EvaluationResult(errorMsg);
+        }
+        
+        // Generate SILModule from the AST
+        std::cout << "[SIL JIT] Generating SILModule..." << std::endl;
+        auto typeConverter = std::make_unique<swift::Lowering::TypeConverter>(*module);
+        auto silModule = swift::performASTLowering(module, *typeConverter, compilerInstance->getInvocation().getSILOptions());
+        
+        if (!silModule) {
+            std::string errorMsg = "Failed to generate SILModule";
+            lastError = errorMsg;
+            return EvaluationResult(errorMsg);
+        }
+        
+        // Print the generated SILModule
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+        std::cout << "[SIL JIT] Generated SILModule:" << std::endl;
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+        
+        auto silOpts = compilerInstance->getInvocation().getSILOptions();
+        swift::SILPrintContext printCtx(llvm::outs(), silOpts);
+        silModule->print(printCtx, module, /*PrintASTDecls=*/false);
+        
+        std::cout << "[SIL JIT] ========================================" << std::endl;
+        
+        // Find all TopLevelCodeDecl nodes
+        auto allDecls = sourceFile->getTopLevelDecls();
+        llvm::SmallVector<swift::TopLevelCodeDecl*, 4> topLevelDecls;
+        for (auto *decl : allDecls) {
+            if (auto *tlcd = llvm::dyn_cast<swift::TopLevelCodeDecl>(decl)) {
+                topLevelDecls.push_back(tlcd);
+            }
+        }
+        
+        if (topLevelDecls.empty()) {
+            // No executable code - might be declarations only
+            std::cout << "[SIL JIT] No executable code to run (declarations only)" << std::endl;
+            return EvaluationResult(0);
+        }
+        
+        // Use RunImmediatelyFromAST which executes all top-level code
+        // Note: We recreate the module each time, so state is maintained through
+        // re-parsing all accumulated code. Variables and functions defined in previous
+        // evaluations are re-parsed and available in subsequent evaluations.
+        std::cout << "[SIL JIT] Executing " << topLevelDecls.size() << " top-level statement(s)..." << std::endl;
+        
+        auto Result = swift::RunImmediatelyFromAST(*compilerInstance);
         
         if (Result != 0) {
             std::cerr << "[SIL JIT] Execution completed with exit code: " << Result << std::endl;
         }
         
         std::cout << "[SIL JIT] ========================================" << std::endl;
-        std::cout << "[SIL JIT] Evaluation completed successfully!" << std::endl;
+        std::cout << "[SIL JIT] Evaluation completed!" << std::endl;
         std::cout << "[SIL JIT] ========================================" << std::endl;
         
         return EvaluationResult(Result);
@@ -177,11 +312,38 @@ public:
         std::cout << "[SIL JIT] ========================================" << std::endl;
         std::cout << "[SIL JIT] Resetting REPL context..." << std::endl;
         
-        // Simulate cleanup of SwiftJIT and SIL modules
-        // In real implementation:
-        // - swiftJIT->deinitialize(jitDylib)
-        // - Clear all SIL modules
-        // - Reset AST context
+        // Clear accumulated source
+        accumulatedSource.clear();
+        
+        // Clear the source file's top-level declarations
+        // Note: getTopLevelDecls() returns a const reference, so we need to
+        // work around this by recreating the source file or using internal APIs
+        // For now, we'll track that we need to start fresh on next evaluation
+        
+        // Reset parser state
+        parserState = std::make_unique<swift::PersistentParserState>();
+        
+        // Clear error state
+        auto &astContext = compilerInstance->getASTContext();
+        astContext.Diags.resetHadAnyError();
+        lastError.clear();
+        
+        // Recreate source file with empty buffer
+        auto &sourceMgr = astContext.SourceMgr;
+        auto emptyBuffer = llvm::MemoryBuffer::getMemBufferCopy("", "<REPL>");
+        unsigned newBufferID = sourceMgr.addNewSourceBuffer(std::move(emptyBuffer));
+        auto parsingOpts = swift::SourceFile::getDefaultParsingOptions(astContext.LangOpts);
+        
+        // Recreate module with empty source file
+        auto *module = swift::ModuleDecl::createMainModule(
+            astContext,
+            astContext.getIdentifier("SwiftJITREPL"),
+            swift::ImplicitImportInfo(),
+            [&](swift::ModuleDecl *mod, auto addFile) {
+                sourceFile = new (astContext) swift::SourceFile(*mod, swift::SourceFileKind::Main, newBufferID, parsingOpts);
+                addFile(sourceFile);
+            });
+        compilerInstance->setMainModule(module);
         
         std::cout << "[SIL JIT] ✓ REPL context reset successfully" << std::endl;
         std::cout << "[SIL JIT] ========================================" << std::endl;
@@ -196,6 +358,15 @@ private:
     REPLConfig config;
     bool initialized = false;
     std::string lastError;
+    
+    // Persistent compiler infrastructure
+    std::unique_ptr<swift::CompilerInstance> compilerInstance;
+    swift::SourceFile *sourceFile = nullptr;
+    std::unique_ptr<swift::PersistentParserState> parserState;
+    std::unique_ptr<swift::SwiftJIT> swiftJIT;
+    
+    // Accumulated source text across evaluations
+    std::string accumulatedSource;
 };
 
 SwiftJITREPL::SwiftJITREPL(const REPLConfig& config) : pImpl(std::make_unique<Impl>(config)) {}

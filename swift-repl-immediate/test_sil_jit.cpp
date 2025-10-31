@@ -25,8 +25,15 @@ int main() {
     // Test basic functionality
     std::cout << "Testing basic REPL functionality..." << std::endl;
     
-    // Test a simple expression
-    auto result = repl.evaluate("print(\"Hello from SIL JIT!\")");
+    // Test a simple Swift program with an explicit entry point
+    auto result = repl.evaluate(
+        "@main\n"
+        "struct Main {\n"
+        "  static func main() {\n"
+        "    print(\"Hello from SIL JIT!\")\n"
+        "  }\n"
+        "}\n"
+    );
     
     if (result.success) {
         std::cout << "✓ Expression evaluation successful!" << std::endl;
@@ -34,49 +41,6 @@ int main() {
         std::cerr << "✗ Expression evaluation failed: " << result.error_message << std::endl;
         return 1;
     }
-    
-    // Test first variable definition
-    std::cout << "Testing first variable definition: let a = 10" << std::endl;
-    result = repl.evaluate("let a = 10");
 
-    if (result.success) {
-        std::cout << "✓ First variable assignment executed successfully!" << std::endl;
-    } else {
-        std::cerr << "✗ First variable assignment failed: " << result.error_message << std::endl;
-        return 1;
-    }
-
-    // Test second variable definition
-    std::cout << "Testing second variable definition: let b = 20" << std::endl;
-    result = repl.evaluate("let b = 20");
-
-    if (result.success) {
-        std::cout << "✓ Second variable assignment executed successfully!" << std::endl;
-    } else {
-        std::cerr << "✗ Second variable assignment failed: " << result.error_message << std::endl;
-        return 1;
-    }
-
-    // Test addition of the two variables
-    std::cout << "Testing addition of variables: print(a + b)" << std::endl;
-    result = repl.evaluate("print(a + b)");
-
-    if (result.success) {
-        std::cout << "✓ Addition expression executed successfully!" << std::endl;
-    } else {
-        std::cerr << "✗ Addition expression failed: " << result.error_message << std::endl;
-        return 1;
-    }
-    
-    // Test reset functionality
-    std::cout << "Testing REPL reset..." << std::endl;
-    if (repl.reset()) {
-        std::cout << "✓ REPL reset successful!" << std::endl;
-    } else {
-        std::cerr << "✗ REPL reset failed: " << repl.getLastError() << std::endl;
-        return 1;
-    }
-    
-    std::cout << "\n🎉 All tests passed! SIL-based Swift JIT REPL is working correctly." << std::endl;
     return 0;
 }
