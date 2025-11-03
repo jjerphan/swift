@@ -1,49 +1,67 @@
 #include "SwiftJITREPL.h"
-#include <iostream>
+#include <gtest/gtest.h>
 
-int main() {
-    std::cout << "Testing SIL-based Swift JIT REPL initialization..." << std::endl;
-    
-    // Check if Swift JIT is available
-    if (!SwiftJITREPL::SwiftJITREPL::isAvailable()) {
-        std::cerr << "Swift JIT is not available on this system" << std::endl;
-        return 1;
+namespace {
+
+struct REPLFixture : public ::testing::Test {
+    SwiftJITREPL::SwiftJITREPL *repl = nullptr;
+
+    void SetUp() override {
+        ASSERT_TRUE(SwiftJITREPL::SwiftJITREPL::isAvailable());
+        SwiftJITREPL::REPLConfig config;
+        config.enable_optimizations = false;
+        config.generate_debug_info = false;
+        repl = new SwiftJITREPL::SwiftJITREPL(config);
+        ASSERT_NE(repl, nullptr);
     }
-    
-    std::cout << "✓ Swift JIT is available!" << std::endl;
-    
-    // Create REPL instance
-    SwiftJITREPL::REPLConfig config;
-    config.enable_optimizations = false;
-    config.generate_debug_info = false;
-    
-    std::cout << "Creating REPL instance..." << std::endl;
-    SwiftJITREPL::SwiftJITREPL repl(config);
-    
-    std::cout << "✓ REPL instance created successfully!" << std::endl;
-    
-    // Test basic functionality
-    std::cout << "Testing basic REPL functionality..." << std::endl;
-    
-    // Test a simple Swift program using top-level code (no @main)
-    auto result = repl.evaluate(
+
+    void TearDown() override {
+        delete repl;
+        repl = nullptr;
+    }
+};
+
+TEST_F(REPLFixture, TopLevelPrint) {
+    auto result = repl->evaluate(
         "import Swift\n"
         "print(\"Hello from SIL JIT!\")\n"
     );
-    
-    if (result.success) {
-        std::cout << "✓ Expression evaluation successful!" << std::endl;
-    } else {
-        std::cerr << "✗ Expression evaluation failed: " << result.error_message << std::endl;
-        return 1;
-    }
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(repl->executeAll(), 0);
+}
 
-    // Execute all materialization units via the JIT (synthesized main)
-    int exitCode = repl.executeAll();
-    if (exitCode != 0) {
-        std::cerr << "✗ JIT execution failed with code: " << exitCode << std::endl;
-        return 1;
-    }
+TEST_F(REPLFixture, StatePersistenceVariable) {
+    auto r = repl->evaluate("import Swift\n");
+    ASSERT_TRUE(r.success) << r.error_message;
+    r = repl->evaluate("var a = 41\n");
+    ASSERT_TRUE(r.success) << r.error_message;
+    r = repl->evaluate("print(a + 1)\n");
+    ASSERT_TRUE(r.success) << r.error_message;
+    EXPECT_EQ(repl->executeAll(), 0);
+}
 
-    return 0;
+TEST_F(REPLFixture, FunctionDefineAndInvoke) {
+    auto r = repl->evaluate("import Swift\n");
+    ASSERT_TRUE(r.success) << r.error_message;
+    r = repl->evaluate("func square(_ x: Int) -> Int { x * x }\n");
+    ASSERT_TRUE(r.success) << r.error_message;
+    r = repl->evaluate("print(square(5))\n");
+    ASSERT_TRUE(r.success) << r.error_message;
+    EXPECT_EQ(repl->executeAll(), 0);
+}
+
+TEST_F(REPLFixture, ErrorThenResetRecovery) {
+    auto r = repl->evaluate("let = broken\n");
+    ASSERT_FALSE(r.success);
+    ASSERT_TRUE(repl->reset());
+    r = repl->evaluate("import Swift\nprint(\"still works\")\n");
+    ASSERT_TRUE(r.success) << r.error_message;
+    EXPECT_EQ(repl->executeAll(), 0);
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

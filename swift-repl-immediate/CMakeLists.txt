@@ -381,8 +381,31 @@ add_executable(test_sil_jit
     test_sil_jit.cpp
 )
 
+target_include_directories(test_sil_jit PRIVATE
+    ${SWIFT_SOURCE_DIR}/include
+    ${SWIFT_BUILD_LLVM}/include
+    ${SWIFT_BUILD_LLVM}/tools/clang/include
+    ${CLANG_SOURCE_DIR}/include
+    ${LLVM_SOURCE_DIR}/include
+    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+    /usr/include/llvm-gtest
+)
+
+# Add LLVM C++ flags but override exception handling for the test, too
+target_compile_options(test_sil_jit PRIVATE ${LLVM_CXXFLAGS})
+target_compile_options(test_sil_jit PRIVATE -fexceptions)
+
 target_link_libraries(test_sil_jit PRIVATE
     SwiftJITREPL
+    ${SWIFT_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+    llvm_gtest
+    llvm_gtest_main
 )
 
 # Set output directories
