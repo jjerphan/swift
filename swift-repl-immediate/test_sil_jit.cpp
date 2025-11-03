@@ -25,20 +25,23 @@ int main() {
     // Test basic functionality
     std::cout << "Testing basic REPL functionality..." << std::endl;
     
-    // Test a simple Swift program with an explicit entry point
+    // Test a simple Swift program using top-level code (no @main)
     auto result = repl.evaluate(
-        "@main\n"
-        "struct Main {\n"
-        "  static func main() {\n"
-        "    print(\"Hello from SIL JIT!\")\n"
-        "  }\n"
-        "}\n"
+        "import Swift\n"
+        "print(\"Hello from SIL JIT!\")\n"
     );
     
     if (result.success) {
         std::cout << "✓ Expression evaluation successful!" << std::endl;
     } else {
         std::cerr << "✗ Expression evaluation failed: " << result.error_message << std::endl;
+        return 1;
+    }
+
+    // Execute all materialization units via the JIT (synthesized main)
+    int exitCode = repl.executeAll();
+    if (exitCode != 0) {
+        std::cerr << "✗ JIT execution failed with code: " << exitCode << std::endl;
         return 1;
     }
 

@@ -34,6 +34,8 @@
 #include "llvm/Support/Error.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ExecutionEngine/Orc/ObjectTransformLayer.h"
 
 // Swift compiler includes
 #include "swift/Frontend/Frontend.h"
@@ -51,6 +53,8 @@
 #include "swift/Parse/Lexer.h"
 #include "swift/Parse/PersistentParserState.h"
 #include "swift/Subsystems.h"
+#include "swift/AST/IRGenRequests.h"
+#include "swift/SILOptimizer/PassManager/Passes.h"
 
 // LLVM target initialization
 #include "llvm/Support/TargetSelect.h"
@@ -120,7 +124,7 @@ public:
         
         // Configure IRGen options for Immediate mode
         auto &irGenOpts = invocation.getIRGenOptions();
-        irGenOpts.OutputKind = swift::IRGenOutputKind::Module;
+        irGenOpts.OutputKind = swift::IRGenOutputKind::ObjectFile;
         irGenOpts.UseJIT = true;
         
         std::string error;
@@ -236,71 +240,82 @@ public:
         // Update the CompilerInstance to use the new module
         compilerInstance->setMainModule(module);
         
-        // Perform semantic analysis - this will parse the SourceFile via the request system
-        // Since we created a fresh SourceFile with a new buffer, there's no cache to clear
+        // Perform semantic analysis; this will parse and type-check the file
+        std::cout << "[SIL JIT] Performing semantic analysis..." << std::endl;
         compilerInstance->performSema();
-        
         if (astContext.hadError() || compilerInstance->getDiags().hadAnyError()) {
             std::string errorMsg = "Semantic analysis error";
             lastError = errorMsg;
             astContext.Diags.resetHadAnyError();
             return EvaluationResult(errorMsg);
         }
-        
-        // Generate SILModule from the AST
+
+        // Generate and print SIL for the current module
+        std::cout << "[SIL JIT] ========================================" << std::endl;
         std::cout << "[SIL JIT] Generating SILModule..." << std::endl;
         auto typeConverter = std::make_unique<swift::Lowering::TypeConverter>(*module);
         auto silModule = swift::performASTLowering(module, *typeConverter, compilerInstance->getInvocation().getSILOptions());
-        
-        if (!silModule) {
-            std::string errorMsg = "Failed to generate SILModule";
-            lastError = errorMsg;
-            return EvaluationResult(errorMsg);
-        }
-        
-        // Print the generated SILModule
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-        std::cout << "[SIL JIT] Generated SILModule:" << std::endl;
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-        
-        auto silOpts = compilerInstance->getInvocation().getSILOptions();
-        swift::SILPrintContext printCtx(llvm::outs(), silOpts);
-        silModule->print(printCtx, module, /*PrintASTDecls=*/false);
-        
-        std::cout << "[SIL JIT] ========================================" << std::endl;
-        
-        // Find all TopLevelCodeDecl nodes
-        auto allDecls = sourceFile->getTopLevelDecls();
-        llvm::SmallVector<swift::TopLevelCodeDecl*, 4> topLevelDecls;
-        for (auto *decl : allDecls) {
-            if (auto *tlcd = llvm::dyn_cast<swift::TopLevelCodeDecl>(decl)) {
-                topLevelDecls.push_back(tlcd);
+        if (silModule) {
+            std::cout << "[SIL JIT] ========================================" << std::endl;
+            std::cout << "[SIL JIT] Generated SILModule:" << std::endl;
+            std::cout << "[SIL JIT] ========================================" << std::endl;
+            auto silOpts = compilerInstance->getInvocation().getSILOptions();
+            swift::SILPrintContext printCtx(llvm::outs(), silOpts);
+            silModule->print(printCtx, module, /*PrintASTDecls=*/false);
+            std::cout << "[SIL JIT] ========================================" << std::endl;
+
+            // Eagerly lower SIL to LLVM IR and add the resulting object to the JIT
+            // so that the synthesized entry (main$impl) is available.
+            silModule->promoteLinkages();
+            swift::runSILDiagnosticPasses(*silModule);
+            swift::runSILLoweringPasses(*silModule);
+
+            const auto &Invocation = compilerInstance->getInvocation();
+            const auto &IRGenOpts = Invocation.getIRGenOptions();
+            const auto &TBDOpts = Invocation.getTBDGenOptions();
+            const auto PSPs = compilerInstance->getPrimarySpecificPathsForAtMostOnePrimary();
+
+            auto GenModule = swift::performIRGeneration(
+                module, IRGenOpts, TBDOpts, std::move(silModule),
+                module->getName().str(), PSPs, {});
+
+            auto *LLVMMod = GenModule.getModule();
+            auto *TM = GenModule.getTargetMachine();
+
+            llvm::SmallVector<char, 0> ObjBuffer;
+            llvm::raw_svector_ostream OS(ObjBuffer);
+            bool error = swift::compileAndWriteLLVM(
+                LLVMMod, TM, IRGenOpts, /*stats*/ nullptr,
+                compilerInstance->getASTContext().Diags, OS);
+            if (!error && swiftJIT) {
+                auto MB = llvm::MemoryBuffer::getMemBufferCopy(
+                    llvm::StringRef(ObjBuffer.data(), ObjBuffer.size()),
+                    "SwiftJITREPL-jitted-object");
+                if (auto Err = swiftJIT->getObjTransformLayer().add(
+                        swiftJIT->getMainJITDylib(), std::move(MB))) {
+                    llvm::errs() << "JIT object add error: ";
+                    llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "");
+                } else {
+                    std::cout << "[SIL JIT] Eagerly added object to JIT" << std::endl;
+                }
+            } else {
+                std::cerr << "[SIL JIT] Failed to emit object for JIT" << std::endl;
             }
         }
-        
-        if (topLevelDecls.empty()) {
-            // No executable code - might be declarations only
-            std::cout << "[SIL JIT] No executable code to run (declarations only)" << std::endl;
-            return EvaluationResult(0);
-        }
-        
-        // Use RunImmediatelyFromAST which executes all top-level code
-        // Note: We recreate the module each time, so state is maintained through
-        // re-parsing all accumulated code. Variables and functions defined in previous
-        // evaluations are re-parsed and available in subsequent evaluations.
-        std::cout << "[SIL JIT] Executing " << topLevelDecls.size() << " top-level statement(s)..." << std::endl;
-        
-        auto Result = swift::RunImmediatelyFromAST(*compilerInstance);
-        
-        if (Result != 0) {
-            std::cerr << "[SIL JIT] Execution completed with exit code: " << Result << std::endl;
-        }
-        
+
         std::cout << "[SIL JIT] ========================================" << std::endl;
         std::cout << "[SIL JIT] Evaluation completed!" << std::endl;
         std::cout << "[SIL JIT] ========================================" << std::endl;
         
-        return EvaluationResult(Result);
+        return EvaluationResult(0);
+    }
+
+    int executeAll() {
+        if (!swiftJIT) return -1;
+        auto Res = swiftJIT->runMain({});
+        if (!Res)
+            return -1;
+        return *Res;
     }
 
     bool reset() {
@@ -382,6 +397,11 @@ bool SwiftJITREPL::reset() {
 
 std::string SwiftJITREPL::getLastError() const {
     return pImpl->getLastError();
+}
+
+int SwiftJITREPL::executeAll() {
+    if (!pImpl) return -1;
+    return pImpl->executeAll();
 }
 
 bool SwiftJITREPL::isAvailable() {

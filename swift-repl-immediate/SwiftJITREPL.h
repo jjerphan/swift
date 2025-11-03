@@ -82,6 +82,8 @@ public:
      * @return Result of the evaluation
      */
     EvaluationResult evaluate(const std::string& expression);
+    // Execute all materialized units via the JIT (runs synthesized/main entry)
+    int executeAll();
     
     /**
      * Reset the REPL context
