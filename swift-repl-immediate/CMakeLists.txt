@@ -416,3 +416,37 @@ set_target_properties(SwiftJITREPL PROPERTIES
 set_target_properties(test_sil_jit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
+
+# Create the swift-repl executable (immediate mode)
+add_executable(swift-repl
+    swift_repl.cpp
+)
+
+target_include_directories(swift-repl PRIVATE
+    ${SWIFT_SOURCE_DIR}/include
+    ${SWIFT_BUILD_LLVM}/include
+    ${SWIFT_BUILD_LLVM}/tools/clang/include
+    ${CLANG_SOURCE_DIR}/include
+    ${LLVM_SOURCE_DIR}/include
+    ${SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims
+)
+
+target_compile_options(swift-repl PRIVATE ${LLVM_CXXFLAGS})
+target_compile_options(swift-repl PRIVATE -fexceptions)
+
+target_link_libraries(swift-repl PRIVATE
+    SwiftJITREPL
+    -Wl,--start-group
+    ${SWIFT_LIBRARIES}
+    ${CLANG_LIBRARIES}
+    ${ADDITIONAL_LIBRARIES}
+    ${SWIFT_RUNTIME_LIBRARIES}
+    ${LLVM_LIBRARIES}
+    -Wl,--end-group
+    ${LLVM_LDFLAGS}
+    ${SWIFT_SYSTEM_LIBRARIES}
+)
+
+set_target_properties(swift-repl PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)

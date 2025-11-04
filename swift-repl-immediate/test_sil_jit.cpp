@@ -27,7 +27,7 @@ TEST_F(REPLFixture, TopLevelPrint) {
         "print(\"Hello from SIL JIT!\")\n"
     );
     ASSERT_TRUE(result.success) << result.error_message;
-    EXPECT_EQ(repl->executeAll(), 0);
+    // executeAll removed; evaluate now runs main internally
 }
 
 TEST_F(REPLFixture, StatePersistenceVariable) {
@@ -37,7 +37,7 @@ TEST_F(REPLFixture, StatePersistenceVariable) {
     ASSERT_TRUE(r.success) << r.error_message;
     r = repl->evaluate("print(a + 1)\n");
     ASSERT_TRUE(r.success) << r.error_message;
-    EXPECT_EQ(repl->executeAll(), 0);
+    // executeAll removed; evaluate now runs main internally
 }
 
 TEST_F(REPLFixture, FunctionDefineAndInvoke) {
@@ -47,7 +47,7 @@ TEST_F(REPLFixture, FunctionDefineAndInvoke) {
     ASSERT_TRUE(r.success) << r.error_message;
     r = repl->evaluate("print(square(5))\n");
     ASSERT_TRUE(r.success) << r.error_message;
-    EXPECT_EQ(repl->executeAll(), 0);
+    // executeAll removed; evaluate now runs main internally
 }
 
 TEST_F(REPLFixture, ErrorThenResetRecovery) {
@@ -56,7 +56,7 @@ TEST_F(REPLFixture, ErrorThenResetRecovery) {
     ASSERT_TRUE(repl->reset());
     r = repl->evaluate("import Swift\nprint(\"still works\")\n");
     ASSERT_TRUE(r.success) << r.error_message;
-    EXPECT_EQ(repl->executeAll(), 0);
+    // executeAll removed; evaluate now runs main internally
 }
 
 } // namespace

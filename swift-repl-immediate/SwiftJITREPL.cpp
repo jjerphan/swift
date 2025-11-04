@@ -304,18 +304,18 @@ public:
         }
 
         std::cout << "[SIL JIT] ========================================" << std::endl;
-        std::cout << "[SIL JIT] Evaluation completed!" << std::endl;
+        std::cout << "[SIL JIT] Running main..." << std::endl;
         std::cout << "[SIL JIT] ========================================" << std::endl;
-        
-        return EvaluationResult(0);
-    }
 
-    int executeAll() {
-        if (!swiftJIT) return -1;
+        // Execute the synthesized main entry via the JIT
+        if (!swiftJIT) {
+            return EvaluationResult("JIT not initialized");
+        }
         auto Res = swiftJIT->runMain({});
-        if (!Res)
-            return -1;
-        return *Res;
+        if (!Res) {
+            return EvaluationResult("Failed to run main");
+        }
+        return EvaluationResult(*Res);
     }
 
     bool reset() {
@@ -397,11 +397,6 @@ bool SwiftJITREPL::reset() {
 
 std::string SwiftJITREPL::getLastError() const {
     return pImpl->getLastError();
-}
-
-int SwiftJITREPL::executeAll() {
-    if (!pImpl) return -1;
-    return pImpl->executeAll();
 }
 
 bool SwiftJITREPL::isAvailable() {
